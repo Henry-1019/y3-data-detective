@@ -328,6 +328,7 @@
 function $(id){ return document.getElementById(id); }
 function randInt(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
 function shuffle(arr){ var a=arr.slice(); for(var i=a.length-1;i>0;i--){ var j=Math.floor(Math.random()*(i+1)); var t=a[i]; a[i]=a[j]; a[j]=t;} return a; }
+function distinctInts(n, lo, hi){ var pool=[]; for (var v=lo; v<=hi; v++) pool.push(v); return shuffle(pool).slice(0,n); }
 function pickN(arr,n){ return shuffle(arr).slice(0,n); }
 function clearEl(el){ while(el.firstChild) el.removeChild(el.firstChild); }
 function el(tag,cls,text){ var e=document.createElement(tag); if(cls) e.className=cls; if(text!==undefined) e.textContent=text; return e; }
@@ -458,7 +459,8 @@ function renderPieChart(container, categories){
     clearEl(stage);
     stage.appendChild(el("p","instr","先把食物分类，再看看整理成的统计表：「✓」代表记录到一位顾客点了这项食物。"));
     stage.appendChild(buildTree());
-    var cats = GROUPS.map(function(g){ return {label:g.cat, count: randInt(2,9)}; });
+    var counts0 = distinctInts(GROUPS.length, 2, 9);
+    var cats = GROUPS.map(function(g,i){ return {label:g.cat, count: counts0[i]}; });
     renderFreqTable(stage, cats);
     var sorted = cats.slice().sort(function(a,b){return b.count-a.count;});
     var qType = randInt(0,3);
@@ -567,7 +569,8 @@ function renderPieChart(container, categories){
     var usePicto = Math.random()<0.5;
     if (usePicto){
       var items = ["文具","书本","运动衣"];
-      var cats = items.map(function(nm){ return {label:nm, count: randInt(2,8)}; });
+      var counts1 = distinctInts(items.length, 2, 8);
+      var cats = items.map(function(nm,i){ return {label:nm, count: counts1[i]}; });
       stage.appendChild(el("p","instr","3R班学生在贩卖部购买的物品如图，每个图案代表1样物品。看图回答问题。"));
       renderPictogram(stage, cats, 1, "🔷");
       var sorted = cats.slice().sort(function(a,b){return b.count-a.count;});
@@ -585,7 +588,8 @@ function renderPieChart(container, categories){
       stage.appendChild(fb);
     } else {
       var names = pickN(["星期一","星期二","星期三"],3);
-      var cats2 = names.map(function(nm){ return {label:nm, count: randInt(2,10)}; });
+      var counts2 = distinctInts(names.length, 2, 10);
+      var cats2 = names.map(function(nm,i){ return {label:nm, count: counts2[i]}; });
       stage.appendChild(el("p","instr","3R班学生三天内在贩卖部购买的物品数量如图，看图回答问题。"));
       renderBarChart(stage, cats2);
       var sorted2 = cats2.slice().sort(function(a,b){return b.count-a.count;});
