@@ -121,7 +121,7 @@
     <button class="eraser" id="eraserBtn" type="button">🧹 橡皮擦</button>
   </div>
   <div class="canvas-wrap" id="canvasWrap" hidden>
-    <canvas id="boardCanvas" width="640" height="400"></canvas>
+    <canvas id="boardCanvas" width="1280" height="800"></canvas>
     <div class="viewonly" id="viewonlyBanner" hidden>老师还没授权你绘图，你现在只能看 👀</div>
     <div class="waiting" id="waitingBanner"><span>正在连线<span class="dot"></span><span class="dot"></span><span class="dot"></span></span></div>
   </div>
@@ -203,7 +203,7 @@
       e.preventDefault();
       var pos = getPos(e);
       var c = erasing ? "#000000" : color;
-      var size = erasing ? 22 : 4;
+      var size = erasing ? 44 : 8;
       drawSegment(lastPos.x, lastPos.y, pos.x, pos.y, c, size, erasing);
       broadcastStroke(lastPos.x, lastPos.y, pos.x, pos.y, c, size, erasing);
       lastPos = pos;
@@ -224,7 +224,7 @@
     }
     function saveSnapshot(){
       if (!client) return;
-      var dataUrl = canvas.toDataURL("image/jpeg", 0.6);
+      var dataUrl = canvas.toDataURL("image/png");
       client.from("live_board").upsert({ id:"current", version:boardVersion, snapshot:dataUrl, updated_at:new Date().toISOString() });
     }
 
