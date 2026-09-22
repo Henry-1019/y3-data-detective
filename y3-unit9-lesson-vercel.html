@@ -330,7 +330,7 @@
       </div>
     </div>
     <div class="board-canvas-wrap">
-      <canvas id="boardCanvas" width="640" height="400"></canvas>
+      <canvas id="boardCanvas" width="1280" height="800"></canvas>
     </div>
     <div class="board-roster">
       <div class="board-roster-head">
@@ -1337,7 +1337,7 @@ function boardPointerMove(e){
   e.preventDefault();
   var pos = getBoardPos(e);
   var color = boardErasing ? "#000000" : boardColor;
-  var size = boardErasing ? 22 : 4;
+  var size = boardErasing ? 44 : 8;
   boardDrawSegment(boardLastPos.x, boardLastPos.y, pos.x, pos.y, color, size, boardErasing);
   broadcastStroke(boardLastPos.x, boardLastPos.y, pos.x, pos.y, color, size, boardErasing);
   boardLastPos = pos;
@@ -1356,7 +1356,7 @@ function scheduleBoardSnapshot(){
 
 function saveBoardSnapshot(){
   if (!pollClient || !boardCanvas) return;
-  var dataUrl = boardCanvas.toDataURL("image/jpeg", 0.6);
+  var dataUrl = boardCanvas.toDataURL("image/png");
   pollClient.from("live_board").upsert({ id:"current", version:boardVersion, snapshot:dataUrl, updated_at:new Date().toISOString() }).then(function(res){
     if (res.error) { /* 保存失败不影响老师这边继续画，学生端下次连线时会补上最新状态 */ }
   });
@@ -1483,7 +1483,7 @@ function setBoardBackgroundFromStage(){
   var stageEl = document.getElementById("stage");
   html2canvas(stageEl, {
     backgroundColor:"#ffffff",
-    scale:1,
+    scale:2,
     ignoreElements: function(node){
       // 白板本身的半透明弹窗背景跟统计图在屏幕上同一个位置，
       // 截图时要跳过它（还有举手统计弹窗），不然截出来的背景会变成灰蒙蒙一片。
