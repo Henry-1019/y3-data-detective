@@ -110,7 +110,7 @@
   </div>
 
   <div class="topbar" id="topbar" hidden>
-    <div class="title">📝 共享白板<span class="me" id="meLabel"></span></div>
+    <div class="title">📝 共享白板<span class="me" id="meLabel"></span><span class="me"><button id="changeNameBtn" type="button">换名字</button></span></div>
     <div class="status" id="statusText">正在连线…</div>
   </div>
   <div class="toolbar" id="toolbar" hidden>
@@ -148,6 +148,7 @@
     var toolbarEl = document.getElementById("toolbar");
     var viewonlyEl = document.getElementById("viewonlyBanner");
     var waitingEl = document.getElementById("waitingBanner");
+    var changeNameBtn = document.getElementById("changeNameBtn");
 
     var myName = "";
     var myClientId = "";
@@ -422,6 +423,37 @@
     }
     nameGoBtn.addEventListener("click", tryStart);
     nameInput.addEventListener("keydown", function(e){ if (e.key === "Enter") tryStart(); });
+
+    /* 换名字：同一台设备给不同学生轮流用的时候，换人先换名字。
+       换名字的时候也会换一个全新的身份 id，这样新同学不会「继承」上一个
+       同学在老师那边被授权画图的状态，老师需要重新勾选授权。 */
+    function leaveBoardConnections(){
+      try { if (channel && client) client.removeChannel(channel); } catch(e){}
+      try { if (presenceChannel && client) client.removeChannel(presenceChannel); } catch(e){}
+      channel = null; presenceChannel = null; client = null;
+      boardStrokes = []; boardBgImage = null; boardStateLoaded = false; boardVersion = 0;
+      allowedIds = []; drawingEnabled = false; currentStroke = null; isDrawing = false;
+    }
+    function switchName(){
+      leaveBoardConnections();
+      myName = "";
+      myClientId = makeClientId();
+      try {
+        localStorage.removeItem(NAME_KEY);
+        localStorage.setItem(CLIENT_KEY, myClientId);
+      } catch(e){}
+      topbar.hidden = true;
+      toolbarEl.hidden = true;
+      canvasWrap.hidden = true;
+      viewonlyEl.hidden = true;
+      waitingEl.hidden = false;
+      statusEl.textContent = "正在连线…"; statusEl.className = "status";
+      nameInput.value = "";
+      nameErr.textContent = "";
+      nameGate.hidden = false;
+      nameInput.focus();
+    }
+    changeNameBtn.addEventListener("click", switchName);
 
     function init(){
       try {
