@@ -1288,6 +1288,7 @@ var boardChannel = null;
 var boardPresenceChannel = null;
 var boardTableWatched = false;
 var boardVersion = 0;
+var boardStateLoaded = false;
 var boardAllowedIds = [];
 var boardRoster = {}; // client_id -> name，来自 Supabase Realtime presence
 var boardColor = "#2B2A33";
@@ -1295,6 +1296,11 @@ var boardErasing = false;
 var boardIsDrawing = false;
 var boardLastPos = null;
 var boardSnapshotTimer = null;
+var boardStrokes = []; // {id, owner, color, size, pts:[{x,y},...]}
+var boardBgImage = null; // 当前背景（Image 或 html2canvas 截出来的 canvas）
+var boardCurrentStroke = null;
+var TEACHER_OWNER = "teacher";
+var BOARD_ERASE_RADIUS = 30; // 橡皮擦命中判定半径（配合 1280x800 画板分辨率）
 
 function initBoardButton(){
   $("boardBtn").hidden = false;
@@ -1309,10 +1315,10 @@ function getBoardPos(e){
   return { x:(clientX-rect.left)*scaleX, y:(clientY-rect.top)*scaleY };
 }
 
-function boardDrawSegment(x0,y0,x1,y1,color,size,erase){
+function boardDrawSegment(x0,y0,x1,y1,color,size){
   boardCtx.save();
   boardCtx.lineCap = "round"; boardCtx.lineJoin = "round";
-  boardCtx.globalCompositeOperation = erase ? "destination-out" : "source-over";
+  boardCtx.globalCompositeOperation = "source-over";
   boardCtx.strokeStyle = color;
   boardCtx.lineWidth = size;
   boardCtx.beginPath();
@@ -1322,30 +1328,110 @@ function boardDrawSegment(x0,y0,x1,y1,color,size,erase){
   boardCtx.restore();
 }
 
-function broadcastStroke(x0,y0,x1,y1,color,size,erase){
+function redrawBoard(){
+  if (!boardCtx) return;
+  boardCtx.fillStyle = "#ffffff"; boardCtx.fillRect(0,0,boardCanvas.width,boardCanvas.height);
+  if (boardBgImage){
+    var bw = boardBgImage.width, bh = boardBgImage.height;
+    if (bw && bh){
+      var ratio = Math.min(boardCanvas.width/bw, boardCanvas.height/bh);
+      var w = bw*ratio, h = bh*ratio;
+      var offX = (boardCanvas.width-w)/2, offY = (boardCanvas.height-h)/2;
+      boardCtx.drawImage(boardBgImage, offX, offY, w, h);
+    }
+  }
+  boardStrokes.forEach(function(s){
+    if (!s.pts || !s.pts.length) return;
+    boardCtx.save();
+    boardCtx.lineCap = "round"; boardCtx.lineJoin = "round";
+    boardCtx.globalCompositeOperation = "source-over";
+    boardCtx.strokeStyle = s.color; boardCtx.lineWidth = s.size;
+    if (s.pts.length === 1){
+      boardCtx.beginPath();
+      boardCtx.arc(s.pts[0].x, s.pts[0].y, s.size/2, 0, Math.PI*2);
+      boardCtx.fillStyle = s.color; boardCtx.fill();
+    } else {
+      boardCtx.beginPath();
+      boardCtx.moveTo(s.pts[0].x, s.pts[0].y);
+      for (var i=1;i<s.pts.length;i++) boardCtx.lineTo(s.pts[i].x, s.pts[i].y);
+      boardCtx.stroke();
+    }
+    boardCtx.restore();
+  });
+}
+
+function distToBoardSeg(px,py,x1,y1,x2,y2){
+  var dx=x2-x1, dy=y2-y1;
+  var lenSq = dx*dx+dy*dy;
+  var t = lenSq ? ((px-x1)*dx+(py-y1)*dy)/lenSq : 0;
+  t = Math.max(0, Math.min(1, t));
+  var cx = x1+t*dx, cy = y1+t*dy;
+  return Math.hypot(px-cx, py-cy);
+}
+function boardStrokeHit(stroke, px, py, radius){
+  if (!stroke.pts || !stroke.pts.length) return false;
+  if (stroke.pts.length === 1){
+    return Math.hypot(px-stroke.pts[0].x, py-stroke.pts[0].y) <= radius;
+  }
+  for (var i=1;i<stroke.pts.length;i++){
+    if (distToBoardSeg(px,py,stroke.pts[i-1].x,stroke.pts[i-1].y,stroke.pts[i].x,stroke.pts[i].y) <= radius) return true;
+  }
+  return false;
+}
+
+/* 老师的橡皮擦不受限制，能擦掉任何人（包括学生）画的东西 */
+function eraseBoardAt(pos){
+  var changed = false;
+  for (var i = boardStrokes.length-1; i>=0; i--){
+    var s = boardStrokes[i];
+    if (boardStrokeHit(s, pos.x, pos.y, BOARD_ERASE_RADIUS + s.size/2)){
+      boardStrokes.splice(i,1);
+      broadcastBoardErase(s.id);
+      changed = true;
+    }
+  }
+  if (changed) redrawBoard();
+}
+
+function broadcastBoardStroke(strokeId, owner, color, size, x0,y0,x1,y1){
   if (!boardChannel) return;
-  boardChannel.send({ type:"broadcast", event:"stroke", payload:{x0:x0,y0:y0,x1:x1,y1:y1,color:color,size:size,erase:!!erase} });
+  boardChannel.send({ type:"broadcast", event:"stroke", payload:{strokeId:strokeId, owner:owner, color:color, size:size, x0:x0,y0:y0,x1:x1,y1:y1} });
+}
+function broadcastBoardErase(strokeId){
+  if (!boardChannel) return;
+  boardChannel.send({ type:"broadcast", event:"eraseStroke", payload:{strokeId:strokeId} });
 }
 
 function boardPointerDown(e){
   e.preventDefault();
   boardIsDrawing = true;
-  boardLastPos = getBoardPos(e);
+  var pos = getBoardPos(e);
+  boardLastPos = pos;
+  if (boardErasing){
+    eraseBoardAt(pos);
+  } else {
+    boardCurrentStroke = { id: TEACHER_OWNER+"-"+Date.now()+"-"+Math.random().toString(36).slice(2), owner: TEACHER_OWNER, color: boardColor, size: 8, pts:[pos] };
+    boardStrokes.push(boardCurrentStroke);
+  }
 }
 function boardPointerMove(e){
   if (!boardIsDrawing) return;
   e.preventDefault();
   var pos = getBoardPos(e);
-  var color = boardErasing ? "#000000" : boardColor;
-  var size = boardErasing ? 44 : 8;
-  boardDrawSegment(boardLastPos.x, boardLastPos.y, pos.x, pos.y, color, size, boardErasing);
-  broadcastStroke(boardLastPos.x, boardLastPos.y, pos.x, pos.y, color, size, boardErasing);
+  if (boardErasing){
+    eraseBoardAt(pos);
+  } else if (boardCurrentStroke){
+    boardCurrentStroke.pts.push(pos);
+    boardDrawSegment(boardLastPos.x, boardLastPos.y, pos.x, pos.y, boardCurrentStroke.color, boardCurrentStroke.size);
+    broadcastBoardStroke(boardCurrentStroke.id, boardCurrentStroke.owner, boardCurrentStroke.color, boardCurrentStroke.size, boardLastPos.x, boardLastPos.y, pos.x, pos.y);
+  }
   boardLastPos = pos;
 }
 function boardPointerUp(){
   if (!boardIsDrawing) return;
   boardIsDrawing = false;
   boardLastPos = null;
+  boardCurrentStroke = null;
   scheduleBoardSnapshot();
 }
 
@@ -1363,18 +1449,33 @@ function saveBoardSnapshot(){
 }
 
 function loadBoardImage(dataUrl, cb){
-  if (!dataUrl){ boardCtx.fillStyle="#ffffff"; boardCtx.fillRect(0,0,boardCanvas.width,boardCanvas.height); if (cb) cb(); return; }
+  if (!dataUrl){ boardBgImage = null; redrawBoard(); if (cb) cb(); return; }
   var img = new Image();
-  img.onload = function(){ boardCtx.fillStyle="#ffffff"; boardCtx.fillRect(0,0,boardCanvas.width,boardCanvas.height); boardCtx.drawImage(img,0,0,boardCanvas.width,boardCanvas.height); if (cb) cb(); };
+  img.onload = function(){ boardBgImage = img; redrawBoard(); if (cb) cb(); };
   img.onerror = function(){ if (cb) cb(); };
   img.src = dataUrl;
+}
+
+/* 老师端每次点开白板都会重新对齐服务器状态；只有版本真的变了（老师/学生把统计图设成
+   背景，或按了清空画板）才会重置成新的「压平底图」，避免每次开关面板都把大家画的笔画
+   重复叠一层、或让「只能擦自己的」失效。 */
+function applyBoardRow(row){
+  boardAllowedIds = Array.isArray(row.allowed_client_ids) ? row.allowed_client_ids : [];
+  renderBoardRoster();
+  var v = row.version || 0;
+  if (!boardStateLoaded || v !== boardVersion){
+    boardVersion = v;
+    boardStrokes = [];
+    boardStateLoaded = true;
+    loadBoardImage(row.snapshot);
+  }
 }
 
 function ensureBoardCanvas(){
   if (boardCanvas) return;
   boardCanvas = $("boardCanvas");
   boardCtx = boardCanvas.getContext("2d");
-  boardCtx.fillStyle = "#ffffff"; boardCtx.fillRect(0,0,boardCanvas.width,boardCanvas.height);
+  redrawBoard();
   boardCanvas.addEventListener("pointerdown", boardPointerDown);
   boardCanvas.addEventListener("pointermove", boardPointerMove);
   window.addEventListener("pointerup", boardPointerUp);
@@ -1442,7 +1543,18 @@ function subscribeBoardRealtime(){
   boardChannel = pollClient.channel("board-live")
     .on("broadcast", { event:"stroke" }, function(msg){
       var p = msg.payload;
-      if (p) boardDrawSegment(p.x0,p.y0,p.x1,p.y1,p.color,p.size,p.erase);
+      if (!p) return;
+      var stroke = null;
+      for (var i=0;i<boardStrokes.length;i++){ if (boardStrokes[i].id===p.strokeId){ stroke=boardStrokes[i]; break; } }
+      if (!stroke){ stroke = { id:p.strokeId, owner:p.owner, color:p.color, size:p.size, pts:[{x:p.x0,y:p.y0}] }; boardStrokes.push(stroke); }
+      stroke.pts.push({x:p.x1,y:p.y1});
+      boardDrawSegment(p.x0,p.y0,p.x1,p.y1,p.color,p.size);
+    })
+    .on("broadcast", { event:"eraseStroke" }, function(msg){
+      var p = msg.payload;
+      if (!p) return;
+      for (var i=0;i<boardStrokes.length;i++){ if (boardStrokes[i].id===p.strokeId){ boardStrokes.splice(i,1); break; } }
+      redrawBoard();
     })
     .subscribe();
   subscribeBoardPresence();
@@ -1452,12 +1564,7 @@ function subscribeBoardRealtime(){
       .on("postgres_changes", { event:"UPDATE", schema:"public", table:"live_board", filter:"id=eq.current" }, function(payload){
         var row = payload.new;
         if (!row) return;
-        boardAllowedIds = Array.isArray(row.allowed_client_ids) ? row.allowed_client_ids : [];
-        renderBoardRoster();
-        if (row.version !== boardVersion){
-          boardVersion = row.version;
-          loadBoardImage(row.snapshot);
-        }
+        applyBoardRow(row);
       })
       .subscribe();
   }
@@ -1468,12 +1575,7 @@ function openBoard(){
   ensureBoardCanvas();
   if (!pollClient) return;
   pollClient.from("live_board").select("*").eq("id","current").maybeSingle().then(function(res){
-    if (res.data){
-      boardVersion = res.data.version || 0;
-      boardAllowedIds = Array.isArray(res.data.allowed_client_ids) ? res.data.allowed_client_ids : [];
-      renderBoardRoster();
-      loadBoardImage(res.data.snapshot);
-    }
+    applyBoardRow(res.data || { version:0, allowed_client_ids:[], snapshot:null });
     subscribeBoardRealtime();
   });
 }
@@ -1490,20 +1592,22 @@ function setBoardBackgroundFromStage(){
       return node.id === "boardOverlay" || node.id === "pollOverlay";
     }
   }).then(function(shot){
-    boardCtx.fillStyle = "#ffffff"; boardCtx.fillRect(0,0,boardCanvas.width,boardCanvas.height);
-    var ratio = Math.min(boardCanvas.width/shot.width, boardCanvas.height/shot.height);
-    var w = shot.width*ratio, h = shot.height*ratio;
-    var offX = (boardCanvas.width-w)/2, offY = (boardCanvas.height-h)/2;
-    boardCtx.drawImage(shot, offX, offY, w, h);
+    boardStrokes = [];
+    boardBgImage = shot;
     boardVersion += 1;
+    boardStateLoaded = true;
+    redrawBoard();
     saveBoardSnapshot();
   }).catch(function(){ alert("截图失败，请再试一次。"); });
 }
 
 function clearBoardCanvas(){
   if (!boardCanvas) return;
-  boardCtx.fillStyle = "#ffffff"; boardCtx.fillRect(0,0,boardCanvas.width,boardCanvas.height);
+  boardStrokes = [];
+  boardBgImage = null;
   boardVersion += 1;
+  boardStateLoaded = true;
+  redrawBoard();
   saveBoardSnapshot();
 }
 
