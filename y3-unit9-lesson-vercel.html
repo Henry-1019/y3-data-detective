@@ -1405,7 +1405,11 @@ function renderBoardRoster(){
 
 function persistAllowedIds(){
   if (!pollClient) return;
-  pollClient.from("live_board").upsert({ id:"current", version:boardVersion, allowed_client_ids:boardAllowedIds, updated_at:new Date().toISOString() });
+  pollClient.from("live_board").upsert({ id:"current", version:boardVersion, allowed_client_ids:boardAllowedIds, updated_at:new Date().toISOString() }).then(function(res){
+    if (res.error){
+      alert("❌ 授权没有保存成功：" + res.error.message + "\n\n很可能是 Supabase 的 live_board 表还没加 allowed_client_ids 字段，请到 Supabase 的 SQL Editor 跑一次：\nalter table live_board add column if not exists allowed_client_ids jsonb not null default '[]'::jsonb;");
+    }
+  });
 }
 
 function toggleStudentAllowed(cid){
@@ -1477,7 +1481,15 @@ function openBoard(){
 function setBoardBackgroundFromStage(){
   if (typeof html2canvas === "undefined"){ alert("背景截图工具还没加载好，请稍等几秒再试一次。"); return; }
   var stageEl = document.getElementById("stage");
-  html2canvas(stageEl, { backgroundColor:"#ffffff", scale:1 }).then(function(shot){
+  html2canvas(stageEl, {
+    backgroundColor:"#ffffff",
+    scale:1,
+    ignoreElements: function(node){
+      // 白板本身的半透明弹窗背景跟统计图在屏幕上同一个位置，
+      // 截图时要跳过它（还有举手统计弹窗），不然截出来的背景会变成灰蒙蒙一片。
+      return node.id === "boardOverlay" || node.id === "pollOverlay";
+    }
+  }).then(function(shot){
     boardCtx.fillStyle = "#ffffff"; boardCtx.fillRect(0,0,boardCanvas.width,boardCanvas.height);
     var ratio = Math.min(boardCanvas.width/shot.width, boardCanvas.height/shot.height);
     var w = shot.width*ratio, h = shot.height*ratio;
