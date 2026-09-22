@@ -7,21 +7,24 @@
 <!--
   =====================================================================
   这是「教师课堂手册」的 Vercel 部署版，跟 y3-unit9-vote.html（学生举手
-  统计作答页）配套使用。
+  统计作答页）、y3-unit9-board.html（学生共享白板页）配套使用。
 
   为什么需要这个版本？
   Claude 网页版发布的手册链接（Artifact）安全限制比较严格，页面里可以
   加载 Supabase 的程式库，但是没办法真正连线到 Supabase 服务器发送/
-  接收资料，所以「举手统计」按钮在 Artifact 版本里是打不开、连不上的。
-  把手册也放到 Vercel（一般网页，没有这层限制），「举手统计」才能真正
-  把题目发出去、即时收到学生的作答。
+  接收资料，所以「举手统计」「共享白板」这两个按钮在 Artifact 版本里
+  是打不开、连不上的。把手册也放到 Vercel（一般网页，没有这层限制），
+  这两个功能才能真正连上 Supabase、跟学生实时互动。
 
-  部署方式：跟 index.html、y3-unit9-vote.html 放在同一个 GitHub 仓库根
-  目录下，一起推上 Vercel，网址就会是
+  部署方式：跟 index.html、y3-unit9-vote.html、y3-unit9-board.html 放在
+  同一个 GitHub 仓库根目录下，一起推上 Vercel，网址就会是
   你的网址.vercel.app/y3-unit9-lesson-vercel.html
   —— 老师上课时改用这个网址打开手册（而不是 Claude 的 Artifact 链接），
-  「举手统计」才会生效。手册本身内容（16 页教具、各种练习题）完全一样，
-  这个版本只是多了「举手统计」这个功能能正常运作。
+  「举手统计」和「共享白板」才会生效。手册本身内容（16 页教具、各种练习
+  题）完全一样，这个版本只是多了这两个功能能正常运作。
+
+  共享白板需要额外建一张 Supabase 表（SQL、RLS、GRANT 语句、Realtime
+  设置说明都写在 y3-unit9-board.html 文件最上面的注释里，请照着跑一遍）。
   =====================================================================
 -->
 <style>
@@ -212,6 +215,21 @@
   .poll-close{ background:var(--bg-soft); border:1px solid var(--line); border-radius:999px; padding:9px 16px; font-weight:700; font-size:13px; cursor:pointer; }
   .poll-send{ background:var(--primary); color:#fff; border:none; border-radius:999px; padding:9px 18px; font-weight:800; font-size:13px; cursor:pointer; }
 
+  .board-panel{ max-width:720px; }
+  .board-toolbar{ display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; }
+  .board-colors{ display:flex; align-items:center; gap:8px; }
+  .board-color{ width:26px; height:26px; border-radius:50%; border:2px solid var(--line); cursor:pointer; padding:0; }
+  .board-color.active{ border-color:var(--ink); box-shadow:0 0 0 2px var(--panel), 0 0 0 4px var(--ink); }
+  .board-eraser{ background:var(--bg-soft); border:1px solid var(--line); border-radius:999px; padding:6px 12px; font-weight:700; font-size:12.5px; cursor:pointer; }
+  .board-eraser.active{ background:var(--primary); color:#fff; border-color:transparent; }
+  .board-actions-row{ display:flex; gap:8px; flex-wrap:wrap; }
+  .board-mini-btn{ background:var(--bg-soft); border:1px solid var(--line); border-radius:999px; padding:6px 12px; font-weight:700; font-size:12.5px; cursor:pointer; }
+  .board-mini-btn:hover{ background:var(--line); }
+  .board-canvas-wrap{ position:relative; border:2px solid var(--line); border-radius:16px; overflow:hidden; background:#fff; }
+  .board-canvas-wrap canvas{ display:block; width:100%; height:auto; touch-action:none; cursor:crosshair; }
+  .board-viewonly{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,.75); font-weight:800; font-size:15px; color:var(--ink-soft); text-align:center; padding:20px; }
+  .board-footer{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:14px; flex-wrap:wrap; }
+
   @media (max-width: 900px){
     .sidebar{ position:fixed; left:0; top:0; bottom:0; z-index:20; transform:translateX(-100%); transition:transform .2s ease; }
     .sidebar.open{ transform:translateX(0); box-shadow:0 0 0 100vmax rgba(0,0,0,.35); }
@@ -223,6 +241,7 @@
 </style>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 </head>
 <body>
 <div class="shell">
@@ -235,6 +254,7 @@
       </div>
       <div style="display:flex; align-items:center; gap:10px;">
         <button class="poll-btn" id="pollBtn" type="button" hidden>🖐️ 举手统计</button>
+        <button class="poll-btn" id="boardBtn" type="button" hidden>📝 共享白板</button>
         <button class="stage-toggle" id="stageToggle" type="button"><span class="dot"></span><span id="stageLabel">大屏模式</span></button>
       </div>
     </div>
@@ -262,6 +282,33 @@
     <div id="pollBody"></div>
     <div class="poll-actions">
       <button class="poll-close" id="pollCloseBtn" type="button">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="poll-overlay" id="boardOverlay">
+  <div class="poll-panel board-panel">
+    <h3>📝 共享白板</h3>
+    <div class="board-toolbar">
+      <div class="board-colors">
+        <button class="board-color active" data-color="#2B2A33" style="background:#2B2A33" type="button" aria-label="黑色"></button>
+        <button class="board-color" data-color="#E63950" style="background:#E63950" type="button" aria-label="红色"></button>
+        <button class="board-color" data-color="#2EC4B6" style="background:#2EC4B6" type="button" aria-label="绿色"></button>
+        <button class="board-color" data-color="#5AC8FA" style="background:#5AC8FA" type="button" aria-label="蓝色"></button>
+        <button class="board-eraser" id="boardEraser" type="button">🧹 橡皮擦</button>
+      </div>
+      <div class="board-actions-row">
+        <button class="board-mini-btn" id="boardBgBtn" type="button">🖼️ 把本页统计图设为背景</button>
+        <button class="board-mini-btn" id="boardClearBtn" type="button">🗑️ 清空画板</button>
+      </div>
+    </div>
+    <div class="board-canvas-wrap">
+      <canvas id="boardCanvas" width="640" height="400"></canvas>
+      <div class="board-viewonly" id="boardViewonly" hidden>老师还没开放绘图，你现在只能看 👀</div>
+    </div>
+    <div class="board-footer">
+      <button class="stage-toggle" id="boardShareToggle" type="button"><span class="dot"></span><span id="boardShareLabel">开放学生绘图</span></button>
+      <button class="poll-close" id="boardCloseBtn" type="button">关闭</button>
     </div>
   </div>
 </div>
@@ -1114,6 +1161,7 @@ function initPoll(){
   try {
     pollClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     $("pollBtn").hidden = false;
+    initBoardButton();
   } catch(e){ /* Supabase unreachable — keep the button hidden, rest of the manual still works */ }
 }
 
@@ -1195,6 +1243,200 @@ $("pollBtn").addEventListener("click", openPollPanel);
 $("pollCloseBtn").addEventListener("click", function(){
   $("pollOverlay").classList.remove("show");
 });
+
+/* ---------------- 共享白板（老师端：一直可以画，可开关让学生也一起画） ---------------- */
+var boardCanvas = null, boardCtx = null;
+var boardChannel = null;
+var boardTableWatched = false;
+var boardVersion = 0;
+var boardDrawingEnabled = false;
+var boardColor = "#2B2A33";
+var boardErasing = false;
+var boardIsDrawing = false;
+var boardLastPos = null;
+var boardSnapshotTimer = null;
+
+function initBoardButton(){
+  $("boardBtn").hidden = false;
+}
+
+function getBoardPos(e){
+  var rect = boardCanvas.getBoundingClientRect();
+  var scaleX = boardCanvas.width / rect.width;
+  var scaleY = boardCanvas.height / rect.height;
+  var clientX = (e.touches && e.touches[0]) ? e.touches[0].clientX : e.clientX;
+  var clientY = (e.touches && e.touches[0]) ? e.touches[0].clientY : e.clientY;
+  return { x:(clientX-rect.left)*scaleX, y:(clientY-rect.top)*scaleY };
+}
+
+function boardDrawSegment(x0,y0,x1,y1,color,size,erase){
+  boardCtx.save();
+  boardCtx.lineCap = "round"; boardCtx.lineJoin = "round";
+  boardCtx.globalCompositeOperation = erase ? "destination-out" : "source-over";
+  boardCtx.strokeStyle = color;
+  boardCtx.lineWidth = size;
+  boardCtx.beginPath();
+  boardCtx.moveTo(x0,y0);
+  boardCtx.lineTo(x1,y1);
+  boardCtx.stroke();
+  boardCtx.restore();
+}
+
+function broadcastStroke(x0,y0,x1,y1,color,size,erase){
+  if (!boardChannel) return;
+  boardChannel.send({ type:"broadcast", event:"stroke", payload:{x0:x0,y0:y0,x1:x1,y1:y1,color:color,size:size,erase:!!erase} });
+}
+
+function boardPointerDown(e){
+  e.preventDefault();
+  boardIsDrawing = true;
+  boardLastPos = getBoardPos(e);
+}
+function boardPointerMove(e){
+  if (!boardIsDrawing) return;
+  e.preventDefault();
+  var pos = getBoardPos(e);
+  var color = boardErasing ? "#000000" : boardColor;
+  var size = boardErasing ? 22 : 4;
+  boardDrawSegment(boardLastPos.x, boardLastPos.y, pos.x, pos.y, color, size, boardErasing);
+  broadcastStroke(boardLastPos.x, boardLastPos.y, pos.x, pos.y, color, size, boardErasing);
+  boardLastPos = pos;
+}
+function boardPointerUp(){
+  if (!boardIsDrawing) return;
+  boardIsDrawing = false;
+  boardLastPos = null;
+  scheduleBoardSnapshot();
+}
+
+function scheduleBoardSnapshot(){
+  if (boardSnapshotTimer) clearTimeout(boardSnapshotTimer);
+  boardSnapshotTimer = setTimeout(saveBoardSnapshot, 1200);
+}
+
+function saveBoardSnapshot(){
+  if (!pollClient || !boardCanvas) return;
+  var dataUrl = boardCanvas.toDataURL("image/jpeg", 0.6);
+  pollClient.from("live_board").upsert({ id:"current", version:boardVersion, drawing_enabled:boardDrawingEnabled, snapshot:dataUrl, updated_at:new Date().toISOString() }).then(function(res){
+    if (res.error) { /* 保存失败不影响老师这边继续画，学生端下次连线时会补上最新状态 */ }
+  });
+}
+
+function loadBoardImage(dataUrl, cb){
+  if (!dataUrl){ boardCtx.fillStyle="#ffffff"; boardCtx.fillRect(0,0,boardCanvas.width,boardCanvas.height); if (cb) cb(); return; }
+  var img = new Image();
+  img.onload = function(){ boardCtx.fillStyle="#ffffff"; boardCtx.fillRect(0,0,boardCanvas.width,boardCanvas.height); boardCtx.drawImage(img,0,0,boardCanvas.width,boardCanvas.height); if (cb) cb(); };
+  img.onerror = function(){ if (cb) cb(); };
+  img.src = dataUrl;
+}
+
+function ensureBoardCanvas(){
+  if (boardCanvas) return;
+  boardCanvas = $("boardCanvas");
+  boardCtx = boardCanvas.getContext("2d");
+  boardCtx.fillStyle = "#ffffff"; boardCtx.fillRect(0,0,boardCanvas.width,boardCanvas.height);
+  boardCanvas.addEventListener("pointerdown", boardPointerDown);
+  boardCanvas.addEventListener("pointermove", boardPointerMove);
+  window.addEventListener("pointerup", boardPointerUp);
+}
+
+function updateBoardToggleUI(){
+  var btn = $("boardShareToggle");
+  if (!btn) return;
+  btn.classList.toggle("on", boardDrawingEnabled);
+  $("boardShareLabel").textContent = boardDrawingEnabled ? "学生可以绘图" : "开放学生绘图";
+}
+
+function subscribeBoardRealtime(){
+  if (!pollClient) return;
+  if (boardChannel) pollClient.removeChannel(boardChannel);
+  boardChannel = pollClient.channel("board-live")
+    .on("broadcast", { event:"stroke" }, function(msg){
+      var p = msg.payload;
+      if (p) boardDrawSegment(p.x0,p.y0,p.x1,p.y1,p.color,p.size,p.erase);
+    })
+    .subscribe();
+  if (!boardTableWatched){
+    boardTableWatched = true;
+    pollClient.channel("board-row-watch")
+      .on("postgres_changes", { event:"UPDATE", schema:"public", table:"live_board", filter:"id=eq.current" }, function(payload){
+        var row = payload.new;
+        if (!row) return;
+        boardDrawingEnabled = !!row.drawing_enabled;
+        updateBoardToggleUI();
+        if (row.version !== boardVersion){
+          boardVersion = row.version;
+          loadBoardImage(row.snapshot);
+        }
+      })
+      .subscribe();
+  }
+}
+
+function openBoard(){
+  $("boardOverlay").classList.add("show");
+  ensureBoardCanvas();
+  if (!pollClient) return;
+  pollClient.from("live_board").select("*").eq("id","current").maybeSingle().then(function(res){
+    if (res.data){
+      boardVersion = res.data.version || 0;
+      boardDrawingEnabled = !!res.data.drawing_enabled;
+      updateBoardToggleUI();
+      loadBoardImage(res.data.snapshot);
+    }
+    subscribeBoardRealtime();
+  });
+}
+
+function setBoardBackgroundFromStage(){
+  if (typeof html2canvas === "undefined"){ alert("背景截图工具还没加载好，请稍等几秒再试一次。"); return; }
+  var stageEl = document.getElementById("stage");
+  html2canvas(stageEl, { backgroundColor:"#ffffff", scale:1 }).then(function(shot){
+    boardCtx.fillStyle = "#ffffff"; boardCtx.fillRect(0,0,boardCanvas.width,boardCanvas.height);
+    var ratio = Math.min(boardCanvas.width/shot.width, boardCanvas.height/shot.height);
+    var w = shot.width*ratio, h = shot.height*ratio;
+    var offX = (boardCanvas.width-w)/2, offY = (boardCanvas.height-h)/2;
+    boardCtx.drawImage(shot, offX, offY, w, h);
+    boardVersion += 1;
+    saveBoardSnapshot();
+  }).catch(function(){ alert("截图失败，请再试一次。"); });
+}
+
+function clearBoardCanvas(){
+  if (!boardCanvas) return;
+  boardCtx.fillStyle = "#ffffff"; boardCtx.fillRect(0,0,boardCanvas.width,boardCanvas.height);
+  boardVersion += 1;
+  saveBoardSnapshot();
+}
+
+$("boardBtn").addEventListener("click", openBoard);
+$("boardCloseBtn").addEventListener("click", function(){ $("boardOverlay").classList.remove("show"); });
+$("boardClearBtn").addEventListener("click", clearBoardCanvas);
+$("boardBgBtn").addEventListener("click", setBoardBackgroundFromStage);
+$("boardEraser").addEventListener("click", function(){
+  boardErasing = !boardErasing;
+  this.classList.toggle("active", boardErasing);
+  document.querySelectorAll(".board-color").forEach(function(b){ b.classList.remove("active"); });
+});
+document.querySelectorAll(".board-color").forEach(function(b){
+  b.addEventListener("click", function(){
+    boardErasing = false;
+    $("boardEraser").classList.remove("active");
+    document.querySelectorAll(".board-color").forEach(function(x){ x.classList.remove("active"); });
+    b.classList.add("active");
+    boardColor = b.dataset.color;
+  });
+});
+$("boardShareToggle").addEventListener("click", function(){
+  if (!pollClient) return;
+  var next = !boardDrawingEnabled;
+  boardDrawingEnabled = next;
+  updateBoardToggleUI();
+  pollClient.from("live_board").upsert({ id:"current", version:boardVersion, drawing_enabled:next, updated_at:new Date().toISOString() }).then(function(res){
+    if (res.error){ boardDrawingEnabled = !next; updateBoardToggleUI(); }
+  });
+});
+
 initPoll();
 
 buildSidebar();
