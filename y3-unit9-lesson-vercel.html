@@ -1,0 +1,1207 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>单元九课堂手册</title>
+<!--
+  =====================================================================
+  这是「教师课堂手册」的 Vercel 部署版，跟 y3-unit9-vote.html（学生举手
+  统计作答页）配套使用。
+
+  为什么需要这个版本？
+  Claude 网页版发布的手册链接（Artifact）安全限制比较严格，页面里可以
+  加载 Supabase 的程式库，但是没办法真正连线到 Supabase 服务器发送/
+  接收资料，所以「举手统计」按钮在 Artifact 版本里是打不开、连不上的。
+  把手册也放到 Vercel（一般网页，没有这层限制），「举手统计」才能真正
+  把题目发出去、即时收到学生的作答。
+
+  部署方式：跟 index.html、y3-unit9-vote.html 放在同一个 GitHub 仓库根
+  目录下，一起推上 Vercel，网址就会是
+  你的网址.vercel.app/y3-unit9-lesson-vercel.html
+  —— 老师上课时改用这个网址打开手册（而不是 Claude 的 Artifact 链接），
+  「举手统计」才会生效。手册本身内容（16 页教具、各种练习题）完全一样，
+  这个版本只是多了「举手统计」这个功能能正常运作。
+  =====================================================================
+-->
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Noto+Sans+SC:wght@400;500;700;900&family=Fredoka:wght@500;700&display=swap');
+
+  :root{
+    --bg:#FFF6E9; --bg-soft:#FFEFD6; --panel:#FFFFFF; --ink:#2B2A33; --ink-soft:#6B6879;
+    --line:#EFE2CC; --primary:#FF6B4A; --primary-ink:#7A2A18; --secondary:#2EC4B6;
+    --secondary-ink:#0B4A45; --accent:#FFC93C; --accent-ink:#6B4A00; --wrong:#E63950;
+    --wrong-bg:#FFE3E7; --correct-bg:#DFF7EE; --shadow:0 10px 24px -12px rgba(43,42,51,.28);
+    --sidebar-bg:#FBEEDA; --c1:#FF6B4A; --c2:#2EC4B6; --c3:#FFC93C; --c4:#7B7FE8; --c5:#F76BA8;
+  }
+  /* 教具固定使用浅色主题，不跟随系统深色模式，避免投影时颜色不一致 */
+  :root[data-theme="dark"]{
+    --bg:#1C1B22; --bg-soft:#26242E; --panel:#2A2833; --ink:#F3EFE6; --ink-soft:#B7B2C4;
+    --line:#3A3745; --primary:#FF8266; --primary-ink:#FFE7DF; --secondary:#3FDFCF;
+    --secondary-ink:#08221F; --accent:#FFD666; --accent-ink:#3A2900; --wrong:#FF6B7F;
+    --wrong-bg:#3A2229; --correct-bg:#163229; --shadow:0 10px 26px -12px rgba(0,0,0,.55);
+    --sidebar-bg:#221F29;
+  }
+
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; padding:0; }
+  body{ background:var(--bg); color:var(--ink); min-height:100vh; font-family:"Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif; -webkit-font-smoothing:antialiased; }
+  .display{ font-family:"ZCOOL KuaiLe","Noto Sans SC",sans-serif; }
+  .num{ font-family:"Fredoka","Noto Sans SC",sans-serif; font-variant-numeric:tabular-nums; }
+  button{ font:inherit; color:inherit; }
+
+  .shell{ display:flex; min-height:100vh; }
+  .sidebar{ width:270px; flex:none; background:var(--sidebar-bg); border-right:1px solid var(--line); padding:18px 14px; overflow-y:auto; max-height:100vh; position:sticky; top:0; }
+  .sb-brand{ display:flex; align-items:center; gap:10px; padding:4px 4px 16px; }
+  .sb-badge{ width:38px; height:38px; border-radius:12px; flex:none; background:linear-gradient(155deg, var(--primary), var(--accent)); display:flex; align-items:center; justify-content:center; font-size:19px; box-shadow:var(--shadow); }
+  .sb-title{ font-family:"ZCOOL KuaiLe",sans-serif; font-size:16.5px; line-height:1.25; }
+  .sb-sub{ font-size:11px; color:var(--ink-soft); font-weight:700; letter-spacing:.04em; }
+  .sb-section-title{ font-size:12px; font-weight:800; color:var(--ink-soft); text-transform:uppercase; letter-spacing:.05em; padding:10px 8px 4px; }
+  .sb-item{ display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:12px; cursor:pointer; font-size:13.5px; color:var(--ink); margin-bottom:2px; }
+  .sb-item:hover{ background:var(--bg-soft); }
+  .sb-item.active{ background:var(--primary); color:#fff; font-weight:700; }
+  .sb-num{ width:20px; height:20px; border-radius:50%; background:var(--panel); color:var(--ink-soft); font-size:11px; font-weight:800; display:flex; align-items:center; justify-content:center; flex:none; }
+  .sb-item.active .sb-num{ background:rgba(255,255,255,.3); color:#fff; }
+
+  .main{ flex:1; min-width:0; display:flex; flex-direction:column; }
+  .topbar{ display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 24px; border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:5; }
+  .crumb{ font-size:13px; color:var(--ink-soft); font-weight:700; }
+  .crumb b{ color:var(--primary-ink); }
+  .menu-toggle{ display:none; align-items:center; justify-content:center; width:36px; height:36px; border-radius:10px; border:1px solid var(--line); background:var(--panel); cursor:pointer; font-size:16px; }
+  .stage-toggle{ display:flex; align-items:center; gap:8px; background:var(--bg-soft); border:1px solid var(--line); border-radius:999px; padding:7px 14px 7px 8px; cursor:pointer; font-size:13px; font-weight:700; color:var(--ink-soft); }
+  .stage-toggle .dot{ width:28px; height:16px; border-radius:999px; background:var(--line); position:relative; flex:none; }
+  .stage-toggle .dot::after{ content:""; position:absolute; top:2px; left:2px; width:12px; height:12px; border-radius:50%; background:var(--panel); box-shadow:0 1px 3px rgba(0,0,0,.3); transition:left .18s ease; }
+  .stage-toggle.on .dot{ background:var(--primary); } .stage-toggle.on{ color:var(--ink); } .stage-toggle.on .dot::after{ left:14px; }
+
+  .content{ flex:1; padding:26px 28px 40px; max-width:980px; width:100%; margin:0 auto; }
+  .slide-tag{ display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:800; color:var(--primary-ink); background:color-mix(in srgb, var(--primary) 14%, var(--panel)); padding:4px 12px; border-radius:999px; margin-bottom:10px; }
+  .slide-title{ font-family:"ZCOOL KuaiLe",sans-serif; font-size:clamp(22px,3.4vw,30px); margin:0 0 8px; text-wrap:balance; }
+  .slide-goal{ font-size:14.5px; color:var(--ink-soft); margin:0; }
+  .tip-toggle{ display:inline-flex; align-items:center; gap:6px; margin-top:10px; font-size:13px; font-weight:700; color:var(--secondary-ink); background:color-mix(in srgb, var(--secondary) 16%, var(--panel)); border:none; padding:7px 13px; border-radius:999px; cursor:pointer; }
+  .tip-panel{ display:none; margin-top:10px; background:color-mix(in srgb, var(--secondary) 8%, var(--panel)); border:1px dashed color-mix(in srgb, var(--secondary) 45%, var(--line)); border-radius:14px; padding:12px 16px; font-size:13.5px; color:var(--ink); line-height:1.7; }
+  .tip-panel.show{ display:block; }
+  .tip-panel .std{ font-size:11.5px; color:var(--ink-soft); margin-top:6px; font-weight:700; }
+
+  .stage{ background:var(--panel); border:1px solid var(--line); border-radius:24px; padding:clamp(20px,3.6vw,36px); margin-top:18px; box-shadow:var(--shadow); min-height:300px; display:flex; flex-direction:column; gap:20px; align-items:center; justify-content:center; text-align:center; }
+  .instr{ color:var(--ink-soft); font-size:15px; margin:0; max-width:620px; }
+  .feedback{ min-height:28px; font-weight:800; font-size:16px; }
+  .feedback.ok{ color:var(--secondary-ink); } .feedback.no{ color:var(--wrong); }
+  .choices{ display:flex; flex-wrap:wrap; gap:14px; justify-content:center; }
+  .choice{ min-width:64px; padding:13px 20px; border-radius:16px; border:2px solid var(--line); background:var(--bg-soft); font-weight:800; font-size:20px; cursor:pointer; transition:transform .12s ease, border-color .12s ease; }
+  .choice:hover{ transform:translateY(-2px); border-color:var(--primary); }
+  .choice.small{ font-size:15px; font-weight:700; padding:11px 16px; max-width:300px; }
+  .choice.correct{ background:var(--correct-bg); border-color:var(--secondary); }
+  .choice.wrong{ background:var(--wrong-bg); border-color:var(--wrong); }
+  .choice[disabled]{ cursor:default; opacity:.85; }
+  .redo{ background:var(--accent); color:var(--accent-ink); border:none; border-radius:999px; padding:9px 18px; font-weight:800; font-size:13.5px; cursor:pointer; box-shadow:var(--shadow); }
+
+  .tree{ display:flex; flex-direction:column; align-items:center; gap:6px; font-size:14px; }
+  .tree-root{ font-weight:800; background:var(--bg-soft); border:1px solid var(--line); border-radius:12px; padding:6px 16px; }
+  .tree-branches{ display:flex; gap:22px; flex-wrap:wrap; justify-content:center; margin-top:10px; }
+  .tree-branch{ display:flex; flex-direction:column; align-items:center; gap:6px; }
+  .tree-branch .cat{ font-weight:800; color:var(--primary-ink); background:color-mix(in srgb, var(--primary) 14%, var(--panel)); border-radius:999px; padding:5px 14px; font-size:13.5px; }
+  .tree-branch .items{ font-size:12.5px; color:var(--ink-soft); max-width:140px; text-align:center; }
+
+  .freq-table{ display:flex; flex-direction:column; gap:8px; width:100%; max-width:440px; }
+  .freq-row{ display:grid; grid-template-columns:76px 1fr 40px; align-items:center; gap:10px; border-bottom:1px dashed var(--line); padding-bottom:7px; }
+  .freq-label{ font-weight:800; font-size:14px; text-align:right; }
+  .freq-checks{ display:flex; flex-wrap:wrap; gap:3px; font-size:15px; color:var(--secondary-ink); }
+  .freq-count{ font-weight:800; text-align:center; }
+
+  .pg-table{ display:flex; flex-direction:column; gap:10px; align-items:stretch; width:100%; max-width:560px; }
+  .pg-row{ display:flex; align-items:center; gap:12px; border-bottom:1px dashed var(--line); padding-bottom:8px; }
+  .pg-label{ width:84px; flex:none; font-weight:800; font-size:14px; text-align:right; }
+  .pg-icons{ display:flex; flex-wrap:wrap; gap:4px; font-size:22px; }
+  .pg-key{ font-size:12.5px; color:var(--ink-soft); margin-top:4px; }
+
+  .bar-chart{ display:flex; align-items:flex-end; gap:18px; height:180px; padding:0 10px; }
+  .bar-col{ display:flex; flex-direction:column; align-items:center; gap:6px; justify-content:flex-end; height:100%; }
+  .bar-rect{ width:38px; border-radius:8px 8px 0 0; }
+  .bar-rect.missing{ background:repeating-linear-gradient(45deg, var(--line), var(--line) 6px, transparent 6px, transparent 12px) !important; border:2px dashed var(--ink-soft); }
+  .bar-label{ font-size:12.5px; font-weight:700; color:var(--ink-soft); }
+
+  .pie-wrap{ display:flex; gap:22px; align-items:center; flex-wrap:wrap; justify-content:center; }
+  .pie{ width:170px; height:170px; border-radius:50%; }
+  .pie-legend{ display:flex; flex-direction:column; gap:8px; text-align:left; font-size:13.5px; }
+  .pie-legend .row{ display:flex; align-items:center; gap:8px; }
+  .pie-swatch{ width:14px; height:14px; border-radius:4px; flex:none; }
+
+  .chart-trio{ display:flex; gap:16px; flex-wrap:wrap; justify-content:center; align-items:flex-start; }
+  .chart-card{ background:var(--bg-soft); border:1px solid var(--line); border-radius:16px; padding:12px 14px; display:flex; flex-direction:column; align-items:center; gap:6px; min-width:170px; }
+  .chart-card h4{ margin:0; font-size:12.5px; font-weight:800; color:var(--primary-ink); }
+
+  .vocab-table{ width:100%; max-width:640px; border-collapse:collapse; text-align:left; }
+  .vocab-table th, .vocab-table td{ border:1px solid var(--line); padding:9px 14px; font-size:14px; }
+  .vocab-table th{ background:var(--bg-soft); font-weight:800; }
+
+  .shape-table{ width:100%; max-width:280px; border-collapse:collapse; text-align:left; }
+  .shape-table th, .shape-table td{ border:1px solid var(--line); padding:8px 12px; font-size:13.5px; }
+  .shape-table th{ background:var(--bg-soft); font-weight:800; }
+  .shape-tables{ display:flex; gap:24px; flex-wrap:wrap; justify-content:center; }
+
+  .stem-imgrow{ display:flex; gap:14px; flex-wrap:wrap; justify-content:center; font-size:40px; }
+  .stem-card{ background:var(--bg-soft); border:1px solid var(--line); border-radius:14px; padding:14px 18px; font-size:13.5px; max-width:220px; }
+  .coin-row{ display:flex; flex-wrap:wrap; gap:4px; justify-content:center; font-size:22px; max-width:480px; }
+  .coin-emoji{ display:inline-block; animation:coinpop .25s ease; }
+  @keyframes coinpop{ from{ transform:scale(0.4); opacity:0; } to{ transform:scale(1); opacity:1; } }
+
+  .word-problem{ text-align:left; max-width:600px; }
+  .word-problem .q{ font-size:15.5px; font-weight:700; margin-bottom:12px; }
+  .step{ display:flex; gap:10px; align-items:flex-start; margin-bottom:9px; }
+  .step .k{ flex:none; font-size:12px; font-weight:800; padding:4px 9px; border-radius:999px; color:#fff; }
+  .step .k.s1{ background:#5AC8FA; } .step .k.s2{ background:#FF9F43; } .step .k.s3{ background:var(--secondary); } .step .k.s4{ background:#A78BFA; }
+  .step .v{ font-size:14px; padding-top:2px; }
+
+  .footer-nav{ display:flex; align-items:center; justify-content:space-between; gap:12px; padding:16px 28px 26px; max-width:980px; width:100%; margin:0 auto; }
+  .nav-btn{ display:inline-flex; align-items:center; gap:6px; background:var(--panel); border:1px solid var(--line); border-radius:999px; padding:11px 20px; font-weight:800; font-size:14px; cursor:pointer; box-shadow:var(--shadow); }
+  .nav-btn:hover{ background:var(--bg-soft); }
+  .nav-btn[disabled]{ opacity:.4; cursor:default; }
+  .nav-btn.primary{ background:var(--primary); color:#fff; border-color:transparent; }
+  .progress-txt{ font-size:13px; font-weight:800; color:var(--ink-soft); }
+
+  body.stage-mode .slide-title{ font-size:clamp(26px,4.2vw,36px); }
+  body.stage-mode .instr{ font-size:18px; }
+  body.stage-mode .choice{ font-size:26px; padding:16px 24px; }
+  body.stage-mode .choice.small{ font-size:17px; }
+  body.stage-mode .feedback{ font-size:19px; }
+  body.stage-mode .pg-icons{ font-size:28px; }
+
+  .choice.selected{ background:color-mix(in srgb, var(--secondary) 22%, var(--panel)); border-color:var(--secondary); }
+
+  .numpad-wrap{ display:flex; flex-direction:column; align-items:center; gap:14px; }
+  .numpad-display{ font-family:"Fredoka","Noto Sans SC",sans-serif; font-size:32px; font-weight:800; min-width:120px; text-align:center; padding:10px 22px; border-radius:16px; border:2px solid var(--line); background:var(--bg-soft); }
+  .numpad-display.ok{ background:var(--correct-bg); border-color:var(--secondary); }
+  .numpad-display.no{ background:var(--wrong-bg); border-color:var(--wrong); }
+  .numpad-grid{ display:grid; grid-template-columns:repeat(3,64px); gap:10px; }
+  .numpad-key{ padding:14px 0; border-radius:14px; border:2px solid var(--line); background:var(--panel); font-weight:800; font-size:20px; cursor:pointer; }
+  .numpad-key:hover{ border-color:var(--primary); }
+  .numpad-key.go{ background:var(--primary); color:#fff; border-color:transparent; }
+  .numpad-key[disabled]{ opacity:.6; cursor:default; }
+
+  .dragblank-wrap{ display:flex; flex-direction:column; align-items:center; gap:18px; width:100%; }
+  .dragblank-slots{ display:flex; gap:14px; flex-wrap:wrap; justify-content:center; }
+  .dragblank-col{ display:flex; flex-direction:column; align-items:center; gap:6px; }
+  .dragblank-caption{ font-size:12.5px; color:var(--ink-soft); font-weight:700; max-width:110px; text-align:center; }
+  .drag-slot{ min-width:64px; min-height:46px; border:2px dashed var(--line-strong,var(--line)); border-radius:14px; background:var(--bg-soft); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:17px; cursor:pointer; padding:6px 10px; }
+  .drag-slot.filled{ border-style:solid; background:var(--panel); }
+  .drag-slot.correct{ border-color:var(--secondary); background:var(--correct-bg); }
+  .drag-slot.wrong{ border-color:var(--wrong); background:var(--wrong-bg); }
+  .dragblank-pool{ display:flex; gap:10px; flex-wrap:wrap; justify-content:center; padding-top:6px; border-top:1px dashed var(--line); }
+  .drag-chip{ padding:10px 16px; border-radius:12px; border:2px solid var(--line); background:var(--panel); font-weight:800; font-size:16px; cursor:grab; touch-action:none; user-select:none; }
+  .drag-chip.selected{ border-color:var(--primary); background:color-mix(in srgb, var(--primary) 14%, var(--panel)); }
+  .drag-chip.used{ opacity:.3; cursor:default; }
+  .drag-chip.dragging{ opacity:.3; }
+  .drag-ghost{ position:fixed; pointer-events:none; z-index:1000; transform:translate(-50%,-50%); opacity:.9; box-shadow:var(--shadow); }
+
+  .poll-btn{ display:inline-flex; align-items:center; gap:6px; background:var(--panel); border:1px solid var(--line); border-radius:999px; padding:8px 14px; font-weight:700; font-size:13px; cursor:pointer; color:var(--ink-soft); }
+  .poll-btn:hover{ background:var(--bg-soft); }
+  .poll-overlay{ position:fixed; inset:0; background:rgba(20,20,25,.45); display:none; align-items:center; justify-content:center; z-index:200; padding:20px; }
+  .poll-overlay.show{ display:flex; }
+  .poll-panel{ background:var(--panel); border-radius:22px; box-shadow:var(--shadow); padding:24px 26px; max-width:460px; width:100%; max-height:86vh; overflow-y:auto; }
+  .poll-panel h3{ font-family:"ZCOOL KuaiLe",sans-serif; font-size:19px; margin:0 0 10px; }
+  .poll-q{ font-size:14.5px; font-weight:700; margin-bottom:10px; }
+  .poll-opts{ display:flex; flex-direction:column; gap:8px; margin-bottom:14px; }
+  .poll-opt-row{ display:flex; align-items:center; gap:10px; }
+  .poll-opt-label{ flex:0 0 96px; font-size:13.5px; font-weight:700; }
+  .poll-bar-track{ flex:1; height:22px; border-radius:11px; background:var(--bg-soft); overflow:hidden; }
+  .poll-bar-fill{ height:100%; background:var(--secondary); border-radius:11px; transition:width .3s ease; }
+  .poll-count{ flex:0 0 30px; text-align:right; font-weight:800; font-size:13px; }
+  .poll-actions{ display:flex; gap:10px; justify-content:flex-end; }
+  .poll-total{ font-size:12.5px; color:var(--ink-soft); margin-bottom:10px; }
+  .poll-empty{ font-size:13.5px; color:var(--ink-soft); text-align:center; padding:20px 0; }
+  .poll-close{ background:var(--bg-soft); border:1px solid var(--line); border-radius:999px; padding:9px 16px; font-weight:700; font-size:13px; cursor:pointer; }
+  .poll-send{ background:var(--primary); color:#fff; border:none; border-radius:999px; padding:9px 18px; font-weight:800; font-size:13px; cursor:pointer; }
+
+  @media (max-width: 900px){
+    .sidebar{ position:fixed; left:0; top:0; bottom:0; z-index:20; transform:translateX(-100%); transition:transform .2s ease; }
+    .sidebar.open{ transform:translateX(0); box-shadow:0 0 0 100vmax rgba(0,0,0,.35); }
+    .menu-toggle{ display:flex; }
+    .content{ padding:20px 16px 32px; }
+    .footer-nav{ padding:12px 16px 22px; }
+  }
+  @media (prefers-reduced-motion: reduce){ *{ transition-duration:.001ms !important; } }
+</style>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+<div class="shell">
+  <nav class="sidebar" id="sidebar"></nav>
+  <div class="main">
+    <div class="topbar">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <button class="menu-toggle" id="menuToggle" type="button" aria-label="目录">☰</button>
+        <div class="crumb" id="crumb"></div>
+      </div>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <button class="poll-btn" id="pollBtn" type="button" hidden>🖐️ 举手统计</button>
+        <button class="stage-toggle" id="stageToggle" type="button"><span class="dot"></span><span id="stageLabel">大屏模式</span></button>
+      </div>
+    </div>
+    <div class="content">
+      <div class="slide-head">
+        <div class="slide-tag" id="slideTag"></div>
+        <h1 class="slide-title display" id="slideTitle"></h1>
+        <p class="slide-goal" id="slideGoal"></p>
+        <button class="tip-toggle" id="tipToggle" type="button">💡 教学提示（给老师看）</button>
+        <div class="tip-panel" id="tipPanel"></div>
+      </div>
+      <div class="stage" id="stage"></div>
+    </div>
+    <div class="footer-nav">
+      <button class="nav-btn" id="prevBtn" type="button">← 上一页</button>
+      <div class="progress-txt" id="progressTxt"></div>
+      <button class="nav-btn primary" id="nextBtn" type="button">下一页 →</button>
+    </div>
+  </div>
+</div>
+
+<div class="poll-overlay" id="pollOverlay">
+  <div class="poll-panel">
+    <h3>🖐️ 举手统计</h3>
+    <div id="pollBody"></div>
+    <div class="poll-actions">
+      <button class="poll-close" id="pollCloseBtn" type="button">关闭</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+"use strict";
+function $(id){ return document.getElementById(id); }
+function randInt(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
+function shuffle(arr){ var a=arr.slice(); for(var i=a.length-1;i>0;i--){ var j=Math.floor(Math.random()*(i+1)); var t=a[i]; a[i]=a[j]; a[j]=t;} return a; }
+function distinctInts(n, lo, hi){ var pool=[]; for (var v=lo; v<=hi; v++) pool.push(v); return shuffle(pool).slice(0,n); }
+function pickN(arr,n){ return shuffle(arr).slice(0,n); }
+function clearEl(el){ while(el.firstChild) el.removeChild(el.firstChild); }
+function el(tag,cls,text){ var e=document.createElement(tag); if(cls) e.className=cls; if(text!==undefined) e.textContent=text; return e; }
+var COLORS = ["var(--c1)","var(--c2)","var(--c3)","var(--c4)","var(--c5)"];
+
+function makeChoiceRow(container, options, correctValue, onDone, cls){
+  var row = el("div","choices"); var answered=false;
+  options.forEach(function(v){
+    var b = el("button", cls || "choice", String(v)); b.type="button";
+    b.addEventListener("click", function(){
+      if (answered) return; answered=true;
+      row.querySelectorAll(".choice").forEach(function(x){ x.disabled=true; });
+      var ok = (v===correctValue);
+      b.classList.add(ok?"correct":"wrong");
+      if(!ok){ row.querySelectorAll(".choice").forEach(function(x){ if(x.textContent==String(correctValue)) x.classList.add("correct"); }); }
+      onDone(ok);
+    });
+    row.appendChild(b);
+  });
+  container.appendChild(row);
+  return row;
+}
+function uniqueOptionsAround(correct,count,lo,hi,spread){
+  var set=new Set([correct]); var guard=0;
+  while(set.size<count && guard<300){ guard++; var v=correct+randInt(-spread,spread); if(v>=lo && v<=hi) set.add(v); }
+  return shuffle(Array.from(set));
+}
+function feedbackText(elx, ok, okMsg, noMsg){ elx.textContent = ok ? (okMsg||"🎉 答对了！") : (noMsg||"再想想看～"); elx.className="feedback "+(ok?"ok":"no"); }
+function addRedo(stage, fn){ var b=el("button","redo","🔄 再出一题"); b.type="button"; b.addEventListener("click", fn); stage.appendChild(b); return b; }
+
+/* ---- 多选题：勾选一个以上答案再提交 ---- */
+function makeMultiSelect(container, options, correctSet, onDone){
+  var wrap = el("div","multi-wrap");
+  var row = el("div","choices");
+  var selected = {};
+  options.forEach(function(opt){
+    var b = el("button","choice small", opt); b.type="button";
+    b.addEventListener("click", function(){
+      if (wrap.classList.contains("answered")) return;
+      selected[opt] = !selected[opt];
+      b.classList.toggle("selected", !!selected[opt]);
+    });
+    row.appendChild(b);
+  });
+  wrap.appendChild(row);
+  var hint = el("div","instr","☝️ 可以勾选一个以上的答案，选好后按「提交答案」。");
+  hint.style.fontSize = "12.5px";
+  wrap.appendChild(hint);
+  var submitBtn = el("button","redo","✅ 提交答案"); submitBtn.type="button";
+  submitBtn.addEventListener("click", function(){
+    if (wrap.classList.contains("answered")) return;
+    wrap.classList.add("answered");
+    var chosen = options.filter(function(o){ return selected[o]; });
+    var correctArr = correctSet.slice().sort();
+    var chosenArr = chosen.slice().sort();
+    var ok = correctArr.length===chosenArr.length && correctArr.every(function(v,i){ return v===chosenArr[i]; });
+    row.querySelectorAll(".choice").forEach(function(b){
+      b.disabled = true;
+      var isCorrect = correctSet.indexOf(b.textContent)>=0;
+      var isChosen = chosen.indexOf(b.textContent)>=0;
+      if (isCorrect) b.classList.add("correct");
+      else if (isChosen) b.classList.add("wrong");
+    });
+    onDone(ok);
+  });
+  wrap.appendChild(submitBtn);
+  container.appendChild(wrap);
+  return wrap;
+}
+
+/* ---- 数字键盘输入：不给选项，自己按数字作答 ---- */
+function makeNumberPad(container, correctValue, onDone){
+  var wrap = el("div","numpad-wrap");
+  var display = el("div","numpad-display","＿");
+  wrap.appendChild(display);
+  var value = "";
+  function render(){ display.textContent = value.length ? value : "＿"; }
+  var grid = el("div","numpad-grid");
+  function submit(){
+    if (wrap.classList.contains("answered") || !value.length) return;
+    wrap.classList.add("answered");
+    var num = Number(value);
+    var ok = num === correctValue;
+    display.classList.add(ok ? "ok" : "no");
+    grid.querySelectorAll(".numpad-key").forEach(function(b){ b.disabled = true; });
+    onDone(ok, num);
+  }
+  ["1","2","3","4","5","6","7","8","9","⌫","0","✓"].forEach(function(k){
+    var b = el("button","numpad-key", k); b.type="button";
+    if (k==="✓") b.classList.add("go");
+    b.addEventListener("click", function(){
+      if (wrap.classList.contains("answered")) return;
+      if (k==="⌫"){ value = value.slice(0,-1); render(); return; }
+      if (k==="✓"){ submit(); return; }
+      if (value.length>=5) return;
+      value += k; render();
+    });
+    grid.appendChild(b);
+  });
+  wrap.appendChild(grid);
+  container.appendChild(wrap);
+  return wrap;
+}
+
+/* ---- 拖拽题：把卡片拖（或点选后再点目标）放进格子里，也可用来做排序题 ---- */
+function makeDragBlank(container, tokens, blanks, onDone){
+  var wrap = el("div","dragblank-wrap");
+  var blankRow = el("div","dragblank-slots");
+  var slotEls = {};
+  var chipEls = {};
+  var selectedChip = null;
+
+  function placeToken(chip, slot){
+    if (selectedChip===chip){ selectedChip.classList.remove("selected"); selectedChip=null; }
+    slot.dataset.filled = chip.dataset.tokenId;
+    slot.textContent = chip.textContent;
+    slot.classList.add("filled");
+    chip.classList.add("used");
+  }
+
+  blanks.forEach(function(b){
+    var slot = el("div","drag-slot","");
+    slot.dataset.blankId = b.id;
+    slot.dataset.filled = "";
+    slotEls[b.id] = slot;
+    slot.addEventListener("click", function(){
+      if (wrap.classList.contains("answered")) return;
+      if (slot.dataset.filled){
+        var tokId = slot.dataset.filled;
+        var chip = chipEls[tokId];
+        if (chip) chip.classList.remove("used");
+        slot.dataset.filled = "";
+        slot.textContent = "";
+        slot.classList.remove("filled");
+      } else if (selectedChip){
+        placeToken(selectedChip, slot);
+      }
+    });
+    if (b.label){
+      var col = el("div","dragblank-col");
+      col.appendChild(el("div","dragblank-caption", b.label));
+      col.appendChild(slot);
+      blankRow.appendChild(col);
+    } else {
+      blankRow.appendChild(slot);
+    }
+  });
+  wrap.appendChild(blankRow);
+
+  var pool = el("div","dragblank-pool");
+  shuffle(tokens).forEach(function(t){
+    var chip = el("div","drag-chip", t.label);
+    chip.dataset.tokenId = t.id;
+    chipEls[t.id] = chip;
+    chip.addEventListener("click", function(){
+      if (wrap.classList.contains("answered") || chip.classList.contains("used")) return;
+      if (selectedChip === chip){ chip.classList.remove("selected"); selectedChip = null; return; }
+      if (selectedChip) selectedChip.classList.remove("selected");
+      selectedChip = chip; chip.classList.add("selected");
+    });
+    chip.addEventListener("pointerdown", function(e){
+      if (wrap.classList.contains("answered") || chip.classList.contains("used")) return;
+      var startX=e.clientX, startY=e.clientY, moved=false, ghost=null;
+      function onMove(ev){
+        var dx=ev.clientX-startX, dy=ev.clientY-startY;
+        if (!moved && Math.hypot(dx,dy)>6){
+          moved = true;
+          ghost = chip.cloneNode(true);
+          ghost.className = "drag-chip drag-ghost";
+          document.body.appendChild(ghost);
+          chip.classList.add("dragging");
+        }
+        if (moved && ghost){ ghost.style.left = ev.clientX+"px"; ghost.style.top = ev.clientY+"px"; }
+      }
+      function onUp(ev){
+        document.removeEventListener("pointermove", onMove);
+        chip.classList.remove("dragging");
+        if (ghost) ghost.remove();
+        if (moved){
+          var target = document.elementFromPoint(ev.clientX, ev.clientY);
+          var slot = target && target.closest ? target.closest(".drag-slot") : null;
+          if (slot && !slot.dataset.filled) placeToken(chip, slot);
+        }
+      }
+      document.addEventListener("pointermove", onMove);
+      document.addEventListener("pointerup", onUp, {once:true});
+    });
+    pool.appendChild(chip);
+  });
+  wrap.appendChild(pool);
+
+  var hint = el("div","instr","☝️ 用手指把下面的卡片拖到上面对应的格子里，也可以先点一下卡片、再点格子。");
+  hint.style.fontSize = "12.5px"; hint.style.order = "-1";
+  wrap.insertBefore(hint, blankRow);
+
+  var submitBtn = el("button","redo","✅ 提交答案"); submitBtn.type="button";
+  submitBtn.addEventListener("click", function(){
+    if (wrap.classList.contains("answered")) return;
+    var allFilled = blanks.every(function(b){ return !!slotEls[b.id].dataset.filled; });
+    if (!allFilled) return;
+    wrap.classList.add("answered");
+    var ok = true;
+    blanks.forEach(function(b){
+      var slot = slotEls[b.id];
+      var correct = slot.dataset.filled === b.correct;
+      if (!correct) ok = false;
+      slot.classList.add(correct ? "correct" : "wrong");
+    });
+    onDone(ok);
+  });
+  wrap.appendChild(submitBtn);
+
+  container.appendChild(wrap);
+  return wrap;
+}
+
+function renderTree(container, root, groups){
+  var tree = el("div","tree");
+  tree.appendChild(el("div","tree-root",root));
+  var branches = el("div","tree-branches");
+  groups.forEach(function(g){
+    var b = el("div","tree-branch");
+    b.appendChild(el("div","cat",g.cat));
+    b.appendChild(el("div","items",g.items));
+    branches.appendChild(b);
+  });
+  tree.appendChild(branches);
+  container.appendChild(tree);
+}
+function renderFreqTable(container, categories){
+  var wrap = el("div","freq-table");
+  var head = el("div","freq-row");
+  head.appendChild(el("div","freq-label","食物"));
+  head.appendChild(el("div","","记录"));
+  head.appendChild(el("div","freq-count","人数"));
+  head.style.borderBottom = "2px solid var(--line)";
+  wrap.appendChild(head);
+  categories.forEach(function(c){
+    var row = el("div","freq-row");
+    row.appendChild(el("div","freq-label", c.label));
+    var checks = el("div","freq-checks");
+    for (var i=0;i<c.count;i++) checks.appendChild(el("span","","✓"));
+    row.appendChild(checks);
+    row.appendChild(el("div","freq-count num", String(c.count)));
+    wrap.appendChild(row);
+  });
+  container.appendChild(wrap);
+}
+function renderPictogram(container, categories, scale, icon){
+  var wrap = el("div","pg-table");
+  categories.forEach(function(c){
+    var row = el("div","pg-row");
+    row.appendChild(el("div","pg-label", c.label));
+    var icons = el("div","pg-icons");
+    var count = Math.round(c.count/scale);
+    for (var i=0;i<count;i++) icons.appendChild(el("span","",icon));
+    row.appendChild(icons);
+    wrap.appendChild(row);
+  });
+  container.appendChild(wrap);
+  container.appendChild(el("div","pg-key", icon + " 代表 " + scale + " 个"));
+}
+function renderBarChart(container, categories, missingIdx){
+  var max = Math.max.apply(null, categories.map(function(c){return c.count;}));
+  var chart = el("div","bar-chart");
+  categories.forEach(function(c,i){
+    var col = el("div","bar-col");
+    var rect = el("div","bar-rect");
+    var isMissing = (missingIdx===i);
+    rect.style.height = isMissing ? "96px" : (Math.round((c.count/max)*130+6)+"px");
+    if (isMissing){ rect.classList.add("missing"); } else { rect.style.background = COLORS[i%COLORS.length]; }
+    var val = el("div","bar-label num", isMissing ? "?" : String(c.count));
+    col.appendChild(val); col.appendChild(rect); col.appendChild(el("div","bar-label", c.label));
+    chart.appendChild(col);
+  });
+  container.appendChild(chart);
+}
+function renderPieChart(container, categories, hideValues){
+  var total = categories.reduce(function(s,c){return s+c.count;},0);
+  var acc=0;
+  var stops = categories.map(function(c,i){ var start=acc/total*360; acc+=c.count; var end=acc/total*360; return COLORS[i%COLORS.length]+" "+start.toFixed(1)+"deg "+end.toFixed(1)+"deg"; }).join(", ");
+  var wrap = el("div","pie-wrap");
+  var pie = el("div","pie"); pie.style.background = "conic-gradient("+stops+")";
+  var legend = el("div","pie-legend");
+  categories.forEach(function(c,i){
+    var row = el("div","row");
+    var sw = el("div","pie-swatch"); sw.style.background=COLORS[i%COLORS.length];
+    row.appendChild(sw); row.appendChild(el("span","", hideValues ? c.label : (c.label+"："+c.count)));
+    legend.appendChild(row);
+  });
+  wrap.appendChild(pie); wrap.appendChild(legend);
+  container.appendChild(wrap);
+  return total;
+}
+
+/* ============ SLIDE KIND RENDERERS（依据课本第105-116页顺序） ============ */
+
+function kindIntro(stage){
+  clearEl(stage);
+  stage.appendChild(el("p","instr","本单元以「开一家健康餐厅」为情境：调查顾客喜欢的食物、整理成统计表和统计图，再选出健康餐盘的菜单。"));
+  var row = el("div","stem-imgrow","🍱 🧑‍🍳 👩‍🍳");
+  stage.appendChild(row);
+  var card = el("div","stem-card","讨论：你到餐厅通常会点什么食物？如果要帮全班同学做「健康餐盘」调查，可以怎样收集资料？");
+  stage.appendChild(card);
+}
+
+function kindClassifyIntro(stage){
+  var GROUPS = [
+    {cat:"米饭", items:"炒饭、五谷粥、糙米饭、饭团"},
+    {cat:"面条", items:"炒米粉、板面"},
+    {cat:"面包", items:"三明治、全麦面包"}
+  ];
+  function build(){
+    clearEl(stage);
+    stage.appendChild(el("p","instr","第一步：把资料进行分类。第二步：用记数符号「✓」把顾客点的食物记录下来，整理成统计表。"));
+    renderTree(stage, "顾客会点的食物", GROUPS);
+    var counts0 = distinctInts(GROUPS.length, 2, 9);
+    var cats = GROUPS.map(function(g,i){ return {label:g.cat, count: counts0[i]}; });
+    renderFreqTable(stage, cats);
+    var sorted = cats.slice().sort(function(a,b){return b.count-a.count;});
+    var qType = randInt(0,2);
+    var q, correct, opts;
+    if (qType===0){ q="哪一种食物被点的人数最多？"; correct=sorted[0].label; opts=shuffle(cats.map(function(c){return c.label;})); }
+    else if (qType===1){ var total=cats.reduce(function(s,c){return s+c.count;},0); q="一共调查了多少位顾客？"; correct=total; opts=uniqueOptionsAround(total,4,0,40,4); }
+    else { var a=cats[0], b=cats[1]; var diff=Math.abs(a.count-b.count); q="「"+a.label+"」比「"+b.label+"」多（或少）多少人？"; correct=diff; opts=uniqueOptionsAround(diff,4,0,15,3); }
+    var qEl = el("div","display",q); qEl.style.fontSize="17px"; stage.appendChild(qEl);
+    var fb = el("div","feedback","");
+    makeChoiceRow(stage, opts, correct, function(ok){ feedbackText(fb, ok, "🎉 答对了！", "正确答案是 "+correct+"。"); }, "choice small");
+    stage.appendChild(fb);
+    addRedo(stage, build);
+  }
+  build();
+}
+
+function kindPieIntro(stage){
+  function build(){
+    clearEl(stage);
+    stage.appendChild(el("p","instr","饼分图是由几个扇形组成整个圆的统计图。整幅饼分图（林伯伯的园地）共种植了100棵植物。"));
+    var vals = shuffle([40,25,20,15]);
+    var labels = ["果树","蔬菜","花树","草药"];
+    var cats = labels.map(function(lb,i){ return {label:lb, count:vals[i]}; });
+    var total = renderPieChart(stage, cats);
+    var sorted = cats.slice().sort(function(a,b){return b.count-a.count;});
+    var qType = randInt(0,3);
+    var q, correct, opts;
+    if (qType===0){ var t=cats[randInt(0,3)]; q="园地里「"+t.label+"」有多少棵？"; correct=t.count; opts=uniqueOptionsAround(correct,4,0,50,5); }
+    else if (qType===1){ q="园地里数量最多的是哪一项？"; correct=sorted[0].label; opts=shuffle(cats.map(function(c){return c.label;})); }
+    else if (qType===2){ q="园地里数量最少的是哪一项？"; correct=sorted[sorted.length-1].label; opts=shuffle(cats.map(function(c){return c.label;})); }
+    else { q="以上植物总数是多少棵？"; correct=total; opts=uniqueOptionsAround(total,4,60,140,8); }
+    var qEl = el("div","display",q); qEl.style.fontSize="17px"; stage.appendChild(qEl);
+    var fb = el("div","feedback","");
+    makeChoiceRow(stage, opts, correct, function(ok){ feedbackText(fb, ok, "🎉 答对了！", "正确答案是 "+correct+"。"); }, "choice small");
+    stage.appendChild(fb);
+    addRedo(stage, build);
+  }
+  build();
+}
+
+function kindPieRead2(stage){
+  function build(){
+    clearEl(stage);
+    stage.appendChild(el("p","instr","100个学生上学的交通工具如饼分图所示，扇形越大代表人数越多。"));
+    var vals = shuffle([42,30,20,8]);
+    var labels = ["汽车","摩托车","校车","其他"];
+    var cats = labels.map(function(lb,i){ return {label:lb, count:vals[i]}; });
+    renderPieChart(stage, cats);
+    var sorted = cats.slice().sort(function(a,b){return b.count-a.count;});
+    var qType = randInt(0,2);
+    var q, correct, opts;
+    if (qType===0){ var p=shuffle([cats[0],cats[1]]); var big=p[0].count>=p[1].count?p[0]:p[1]; var small=big===p[0]?p[1]:p[0]; q="乘坐「"+big.label+"」的比「"+small.label+"」的多多少人？"; correct=big.count-small.count; opts=uniqueOptionsAround(correct,4,0,40,5); }
+    else if (qType===1){ q="最少学生乘坐的交通工具是？"; correct=sorted[sorted.length-1].label; opts=shuffle(cats.map(function(c){return c.label;})); }
+    else { var t=cats[randInt(0,3)]; q="乘坐「"+t.label+"」上学的有多少人？"; correct=t.count; opts=uniqueOptionsAround(correct,4,0,60,6); }
+    var qEl = el("div","display",q); qEl.style.fontSize="17px"; stage.appendChild(qEl);
+    var fb = el("div","feedback","");
+    makeChoiceRow(stage, opts, correct, function(ok){ feedbackText(fb, ok, "🎉 答对了！", "正确答案是 "+correct+"。"); }, "choice small");
+    stage.appendChild(fb);
+    var note = el("div","instr","扇形最小代表人数最少 —— 这100人当中，估计有一些骑自行车上学，人数会比「其他」更少。");
+    note.style.fontSize="13px"; stage.appendChild(note);
+    addRedo(stage, build);
+  }
+  build();
+}
+
+function kindPieDragMatch(stage){
+  function build(){
+    clearEl(stage);
+    stage.appendChild(el("p","instr","这幅饼分图只显示了水果名称，没有显示数量。请把下面的数字卡拖到（或点选后再点）对应的水果格子里。"));
+    var vals = shuffle([32,28,24,16]);
+    var labels = ["苹果","香蕉","橙子","葡萄"];
+    var cats = labels.map(function(lb,i){ return {label:lb, count:vals[i]}; });
+    renderPieChart(stage, cats, true);
+    var hintEl = el("div","instr","提示：扇形越大，代表喜欢这种水果的人数越多。四个数字加起来是 100 人。");
+    hintEl.style.fontSize = "12.5px"; stage.appendChild(hintEl);
+    var tokens = cats.map(function(c){ return {id:c.label, label:String(c.count)}; });
+    var blanks = cats.map(function(c){ return {id:c.label, label:c.label, correct:c.label}; });
+    var fb = el("div","feedback","");
+    makeDragBlank(stage, tokens, blanks, function(ok){ feedbackText(fb, ok, "🎉 全部配对正确！", "有配对错误，绿色格子是对的，红色格子请再想想。"); });
+    stage.appendChild(fb);
+    addRedo(stage, build);
+  }
+  build();
+}
+
+function kindThreeCharts(stage){
+  clearEl(stage);
+  stage.appendChild(el("p","instr","同一组资料——常识抢答比赛的成绩，可以用三种不同的统计图来表示：象形统计图（用✓）、条形统计图（用长条）、饼分图（用扇形）。"));
+  var cats = [{label:"红队",count:8},{label:"黄队",count:10},{label:"蓝队",count:7}];
+  var trio = el("div","chart-trio");
+  var c1 = el("div","chart-card"); c1.appendChild(el("h4","","象形统计图"));
+  var pgBox = el("div",""); renderPictogram(pgBox, cats, 1, "✔️"); c1.appendChild(pgBox);
+  var c2 = el("div","chart-card"); c2.appendChild(el("h4","","条形统计图"));
+  var barBox = el("div",""); renderBarChart(barBox, cats); c2.appendChild(barBox);
+  var c3 = el("div","chart-card"); c3.appendChild(el("h4","","饼分图"));
+  var pieBox = el("div",""); renderPieChart(pieBox, cats); c3.appendChild(pieBox);
+  trio.appendChild(c1); trio.appendChild(c2); trio.appendChild(c3);
+  stage.appendChild(trio);
+  var fb = el("div","feedback","讨论：哪幅图用图案显示信息？哪幅图清楚显示每队答对的题数？哪幅图能看出各队与总数的关系？");
+  fb.className = "feedback ok";
+  stage.appendChild(fb);
+}
+
+function kindThreeCharts2(stage){
+  clearEl(stage);
+  stage.appendChild(el("p","instr","第二个例子：3R班学生在贩卖部购买的物品（象形统计图）、三天内购买数量（条形统计图）、购物学生的男女人数（饼分图）。"));
+  var c1cats = [{label:"文具",count:6},{label:"书本",count:4},{label:"运动衣",count:2}];
+  var c2cats = [{label:"星期一",count:6},{label:"星期二",count:5},{label:"星期三",count:9}];
+  var c3cats = [{label:"男",count:18},{label:"女",count:22}];
+  var trio = el("div","chart-trio");
+  var c1 = el("div","chart-card"); c1.appendChild(el("h4","","象形统计图"));
+  var pgBox = el("div",""); renderPictogram(pgBox, c1cats, 1, "🔷"); c1.appendChild(pgBox);
+  var c2 = el("div","chart-card"); c2.appendChild(el("h4","","条形统计图"));
+  var barBox = el("div",""); renderBarChart(barBox, c2cats); c2.appendChild(barBox);
+  var c3 = el("div","chart-card"); c3.appendChild(el("h4","","饼分图"));
+  var pieBox = el("div",""); renderPieChart(pieBox, c3cats); c3.appendChild(pieBox);
+  trio.appendChild(c1); trio.appendChild(c2); trio.appendChild(c3);
+  stage.appendChild(trio);
+  var fb = el("div","feedback","知识小宝库：信息图 (Infographic) 结合统计图、流程图、时间轴等，简洁易懂，多用于展示大数据。");
+  fb.className = "feedback ok";
+  stage.appendChild(fb);
+}
+
+function kindChooseChart(stage){
+  var SCENARIOS = [
+    { text:"哪幅统计图用图案来显示信息，比较生动？", answer:"象形统计图" },
+    { text:"哪幅统计图清楚地显示每一项的准确数字？", answer:"条形统计图" },
+    { text:"哪幅统计图能看出各组数量与总数的关系？", answer:"饼分图" },
+    { text:"想直接比较各队答对题数的多少，选哪一种？", answer:"条形统计图" },
+    { text:"想知道男生和女生人数各占全班的比例，选哪一种？", answer:"饼分图" }
+  ];
+  function build(){
+    clearEl(stage);
+    stage.appendChild(el("p","instr","三种统计图各有长处：象形统计图生动有趣，条形统计图方便比较数字，饼分图方便看部分与整体的关系。"));
+    var s = SCENARIOS[randInt(0,SCENARIOS.length-1)];
+    var q = el("div","display","「"+s.text+"」"); q.style.fontSize="17px"; q.style.maxWidth="520px"; stage.appendChild(q);
+    var fb = el("div","feedback","");
+    makeChoiceRow(stage, shuffle(["象形统计图","条形统计图","饼分图"]), s.answer, function(ok){ feedbackText(fb, ok, "🎉 答对了！", "比较合适的是「"+s.answer+"」。"); }, "choice small");
+    stage.appendChild(fb);
+    addRedo(stage, build);
+  }
+  build();
+}
+
+function kindMultiQuiz(stage){
+  var QUESTIONS = [
+    { text:"关于饼分图，以下哪些说法是对的？（可选多个）",
+      options:["整个圆代表全部资料（100%）","扇形越大代表数量越多","饼分图能清楚看出发生的先后顺序","各扇形加起来等于整体的总数"],
+      correct:["整个圆代表全部资料（100%）","扇形越大代表数量越多","各扇形加起来等于整体的总数"] },
+    { text:"关于条形统计图，以下哪些说法是对的？（可选多个）",
+      options:["长条越高代表数量越多","可以直接看出每一项的准确数字","一定要用饼分图才能比较大小","方便比较不同项目之间的数量"],
+      correct:["长条越高代表数量越多","可以直接看出每一项的准确数字","方便比较不同项目之间的数量"] }
+  ];
+  function build(){
+    clearEl(stage);
+    var qd = QUESTIONS[randInt(0,QUESTIONS.length-1)];
+    stage.appendChild(el("p","instr","这一题可能有不只一个正确答案，请仔细看清楚每一个选项。"));
+    var q = el("div","display",qd.text); q.style.fontSize="16.5px"; q.style.maxWidth="560px"; stage.appendChild(q);
+    var fb = el("div","feedback","");
+    makeMultiSelect(stage, shuffle(qd.options), qd.correct, function(ok){ feedbackText(fb, ok, "🎉 全部选对了！", "绿色是正确答案，请对照检查一下。"); });
+    stage.appendChild(fb);
+    addRedo(stage, build);
+  }
+  build();
+}
+
+function kindWordProblem(stage){
+  var ITEM_SETS = [
+    { labels:["手帕","报纸","塑料袋","马尼拉卡","玻璃弹子"], attr:[1,1,0,1,0], attrName:"吸水" }
+  ];
+  function build(){
+    clearEl(stage);
+    var setDef = ITEM_SETS[0];
+    var vals = shuffle([24,32,8,16,20]);
+    var cats = setDef.labels.map(function(lb,i){ return {label:lb, count:vals[i], attr:setDef.attr[i]}; });
+    var wrap = el("div","word-problem");
+    wrap.appendChild(el("div","q","学生收集的物品数量如饼分图所示，运用「审题、拟定策略、进行策略、验算」四个步骤解决问题。"));
+    renderPieChart(wrap, cats);
+    var s1 = el("div","step"); s1.innerHTML='<span class="k s1">审题</span>'; s1.appendChild(el("span","v","弄清楚题目在问什么——有多少个学生收集的物品「不吸水」？")); wrap.appendChild(s1);
+    var s2 = el("div","step"); s2.innerHTML='<span class="k s2">拟定策略</span>'; s2.appendChild(el("span","v","把物品按「吸水／不吸水」分类，决定用加法。")); wrap.appendChild(s2);
+    var s3 = el("div","step"); s3.innerHTML='<span class="k s3">进行策略</span>'; s3.appendChild(el("span","v","把不吸水物品（塑料袋、玻璃弹子）的人数加起来。")); wrap.appendChild(s3);
+    var s4 = el("div","step"); s4.innerHTML='<span class="k s4">验算</span>'; s4.appendChild(el("span","v","检查总人数是不是跟饼分图的总人数相同。")); wrap.appendChild(s4);
+    stage.appendChild(wrap);
+    var subset = cats.filter(function(c){ return c.attr===0; });
+    var total = subset.reduce(function(s,c){return s+c.count;},0);
+    var q = el("div","display","有多少个学生收集的物品是「不吸水」的？"); q.style.fontSize="16.5px"; q.style.maxWidth="500px"; stage.appendChild(q);
+    var fb = el("div","feedback","");
+    var opts = uniqueOptionsAround(total,4,0,100,8);
+    makeChoiceRow(stage, opts, total, function(ok){ feedbackText(fb, ok, "🎉 答对了，是 "+total+" 个学生！", "正确答案是 "+total+"。"); }, "choice small");
+    stage.appendChild(fb);
+    addRedo(stage, build);
+  }
+  build();
+}
+
+function kindFillBlank(stage){
+  function build(){
+    clearEl(stage);
+    var sizes = ["S","M","L","XL"];
+    var missingIdx = 2; // L, matching the textbook example
+    var vals = [3,4,0,1];
+    vals[missingIdx] = randInt(2,5);
+    var total = vals.reduce(function(s,v){return s+v;},0);
+    var cats = sizes.map(function(sz,i){ return {label:sz, count:vals[i]}; });
+    stage.appendChild(el("p","instr","启明统计了 "+total+" 个同学的衣服尺码，穿 L 码衣服的人数没有显示出来。用加法和减法计算缺少的数量。"));
+    renderBarChart(stage, cats, missingIdx);
+    var totalEl = el("div","display num", "总人数："+total+" 人"); totalEl.style.fontSize="16px"; stage.appendChild(totalEl);
+    var q = el("div","display","有多少个同学穿 L 码的衣服？（用数字键盘输入答案）"); q.style.fontSize="17px"; stage.appendChild(q);
+    var fb = el("div","feedback","");
+    var correct = vals[missingIdx];
+    makeNumberPad(stage, correct, function(ok, num){ feedbackText(fb, ok, "🎉 答对了，是 "+correct+" 个！", "你输入的是 "+num+"，正确答案是 "+correct+" 个。"); });
+    stage.appendChild(fb);
+    addRedo(stage, build);
+  }
+  build();
+}
+
+function kindClassifyShapes(stage){
+  clearEl(stage);
+  stage.appendChild(el("p","instr","把图形分类和整理成统计表，可以用不同的方法：按「形状」分类，或按「颜色」分类，两种方法都正确。"));
+  var shapeRow = el("div","stem-imgrow","🔺 🔴 🌗 🟢 🔺 🔺 🔵 🔺 🔴 🟢 🌗 🔵 🟢 🔺 🔴");
+  shapeRow.style.fontSize="26px";
+  stage.appendChild(shapeRow);
+  var tables = el("div","shape-tables");
+  var t1 = document.createElement("table"); t1.className="shape-table";
+  var h1 = document.createElement("tr"); h1.appendChild(el("th","","方法1：平面图形")); h1.appendChild(el("th","","数量")); t1.appendChild(h1);
+  [["三角形","5"],["五边形","7"],["六边形","2"],["半圆","6"]].forEach(function(r){ var tr=document.createElement("tr"); tr.appendChild(el("td","",r[0])); tr.appendChild(el("td","",r[1])); t1.appendChild(tr); });
+  var t2 = document.createElement("table"); t2.className="shape-table";
+  var h2 = document.createElement("tr"); h2.appendChild(el("th","","方法2：颜色")); h2.appendChild(el("th","","数量")); t2.appendChild(h2);
+  [["黄色","？"],["红色","？"],["绿色","？"],["蓝色","？"]].forEach(function(r){ var tr=document.createElement("tr"); tr.appendChild(el("td","",r[0])); tr.appendChild(el("td","",r[1])); t2.appendChild(tr); });
+  tables.appendChild(t1); tables.appendChild(t2);
+  stage.appendChild(tables);
+  var fb = el("div","feedback","课堂讨论：还有什么分类法？请学生上台数一数颜色，把方法2的数量填完整。");
+  fb.className = "feedback ok";
+  stage.appendChild(fb);
+}
+
+function kindPieDeduce(stage){
+  function build(){
+    clearEl(stage);
+    stage.appendChild(el("p","instr","日鲜水果店100个水果的销量：① 销量从低至高是西瓜、木瓜、龙珠果和芒果；② 最高销量40个，最低销量10个；③ 木瓜和西瓜的销量相差10个。逆向思考，完成饼分图。"));
+    var cats = [{label:"西瓜",count:10},{label:"木瓜",count:20},{label:"龙珠果",count:30},{label:"芒果",count:40}];
+    renderPieChart(stage, cats);
+    var qType = randInt(0,1);
+    var q, correct, opts;
+    if (qType===0){ q="哪两种水果的总销量是50个？"; correct="木瓜和芒果"; opts=shuffle(["木瓜和芒果","西瓜和龙珠果","西瓜和芒果","木瓜和龙珠果"]); }
+    else { q="龙珠果的销量是多少个？"; correct=30; opts=uniqueOptionsAround(30,4,0,50,8); }
+    var qEl = el("div","display",q); qEl.style.fontSize="16.5px"; qEl.style.maxWidth="520px"; stage.appendChild(qEl);
+    var fb = el("div","feedback","");
+    makeChoiceRow(stage, opts, correct, function(ok){ feedbackText(fb, ok, "🎉 答对了！", "正确答案是「"+correct+"」。"); }, "choice small");
+    stage.appendChild(fb);
+    var tip = el("div","instr","提示：答案不只一组，只要总和符合条件即可，例如西瓜+龙珠果 = 10+30 = 40（不符合），木瓜+芒果 = 20+40 = 60（不符合）——鼓励学生动手多试几组。");
+    tip.style.fontSize="12.5px"; stage.appendChild(tip);
+    addRedo(stage, build);
+  }
+  build();
+}
+
+function kindSortChallenge(stage){
+  var SETS = [
+    { title:"上学交通工具", labels:["汽车","摩托车","校车","其他"] },
+    { title:"最喜欢的水果", labels:["苹果","香蕉","橙子","葡萄"] }
+  ];
+  function build(){
+    clearEl(stage);
+    var setDef = SETS[randInt(0,SETS.length-1)];
+    var vals = distinctInts(setDef.labels.length, 5, 45);
+    var cats = setDef.labels.map(function(lb,i){ return {label:lb, count:vals[i]}; });
+    stage.appendChild(el("p","instr","「"+setDef.title+"」的调查结果如下，请把下面的卡片按人数「从多到少」拖进对应的名次格子里。"));
+    renderBarChart(stage, cats);
+    var sorted = cats.slice().sort(function(a,b){ return b.count-a.count; });
+    var tokens = cats.map(function(c){ return {id:c.label, label:c.label}; });
+    var blanks = sorted.map(function(c,i){ return {id:"rank"+i, label:"第 "+(i+1)+" 名", correct:c.label}; });
+    var fb = el("div","feedback","");
+    makeDragBlank(stage, tokens, blanks, function(ok){ feedbackText(fb, ok, "🎉 排序全部正确！", "绿色格子是对的，红色格子请对照长条图再排一次。"); });
+    stage.appendChild(fb);
+    addRedo(stage, build);
+  }
+  build();
+}
+
+function kindStemFun(stage){
+  var heads = 0, tails = 0, lastFlips = [];
+  function flip(n){
+    lastFlips = [];
+    for (var i=0;i<n;i++){
+      var isHead = Math.random() < 0.5;
+      if (isHead) heads++; else tails++;
+      lastFlips.push(isHead);
+    }
+    renderResult();
+  }
+  function reset(){ heads=0; tails=0; lastFlips=[]; renderResult(); }
+  function renderResult(){
+    var box = $("coinResultBox");
+    if (!box) return;
+    clearEl(box);
+    var total = heads+tails;
+    var coinRow = el("div","coin-row");
+    lastFlips.slice(-20).forEach(function(isHead){
+      coinRow.appendChild(el("span","coin-emoji", isHead ? "🟡" : "⚪"));
+    });
+    if (lastFlips.length) box.appendChild(coinRow);
+    var lastNote = el("div","instr", lastFlips.length ? ("最近一次结果：" + lastFlips.slice(-20).map(function(h){return h?"正面":"背面";}).join("、")) : "还没有抛硬币，点击下面的按钮开始！");
+    lastNote.style.fontSize = "12.5px";
+    box.appendChild(lastNote);
+    if (total>0){
+      var cats = [{label:"正面",count:heads},{label:"背面",count:tails}];
+      var chartsWrap = el("div","chart-trio");
+      var c1 = el("div","chart-card"); c1.appendChild(el("h4","","条形统计图"));
+      var barBox = el("div",""); renderBarChart(barBox, cats); c1.appendChild(barBox);
+      var c2 = el("div","chart-card"); c2.appendChild(el("h4","","饼分图"));
+      var pieBox = el("div",""); renderPieChart(pieBox, cats); c2.appendChild(pieBox);
+      chartsWrap.appendChild(c1); chartsWrap.appendChild(c2);
+      box.appendChild(chartsWrap);
+      var stat = el("div","display num", "共抛 "+total+" 次 · 正面 "+heads+" 次 · 背面 "+tails+" 次");
+      stat.style.fontSize = "15px"; box.appendChild(stat);
+    }
+  }
+  clearEl(stage);
+  stage.appendChild(el("p","instr","轻松乐（网课互动版）：虚拟抛硬币模拟器 —— 点击按钮抛硬币，看看正面和背面出现的次数会不会接近相等，再用统计图比较结果。"));
+  var btnRow = el("div","choices");
+  [["抛 1 次",1],["抛 10 次",10],["抛 100 次",100]].forEach(function(pair){
+    var b = el("button","choice small", pair[0]); b.type="button";
+    b.addEventListener("click", function(){ flip(pair[1]); });
+    btnRow.appendChild(b);
+  });
+  var resetBtn = el("button","redo","🔄 重新开始"); resetBtn.type="button";
+  resetBtn.addEventListener("click", reset);
+  stage.appendChild(btnRow);
+  stage.appendChild(resetBtn);
+  var box = el("div","",""); box.id="coinResultBox"; box.style.cssText="display:flex;flex-direction:column;align-items:center;gap:14px;width:100%;";
+  stage.appendChild(box);
+  renderResult();
+  var tip = el("div","instr","课堂玩法：请几位同学轮流点击「抛10次」，全班一起观察正面、背面次数是否越抛越接近一半一半；也可以先请学生「猜一猜」再公布结果，制造悬念。");
+  tip.style.fontSize="12.5px"; stage.appendChild(tip);
+}
+
+function kindVocab(stage){
+  var VOCAB = [
+    ["收集","Collect"], ["分类","Classify"], ["整理","Organize"], ["记数符号","Tally"], ["记录","Record"],
+    ["统计表","Frequency Table"], ["象形统计图","Pictogram"], ["条形统计图","Bar Chart"], ["饼分图","Pie Chart"],
+    ["扇形","Sector"], ["图例","Legend"], ["标题","Title"], ["审题","Understand the Problem"],
+    ["拟定策略","Devise a Strategy"], ["进行策略","Carry Out the Strategy"], ["验算","Check the Answer"]
+  ];
+  clearEl(stage);
+  stage.appendChild(el("p","instr","单元九重点生字词汇（中英对照），课堂上可作为板书或口头复习。"));
+  var table = document.createElement("table"); table.className="vocab-table";
+  var thead = document.createElement("tr");
+  thead.appendChild(el("th","","中文")); thead.appendChild(el("th","","English"));
+  table.appendChild(thead);
+  VOCAB.forEach(function(pair){
+    var tr = document.createElement("tr");
+    tr.appendChild(el("td","",pair[0])); tr.appendChild(el("td","",pair[1]));
+    table.appendChild(tr);
+  });
+  stage.appendChild(table);
+}
+
+/* ============ SLIDE DATA（对应课本第105-116页） ============ */
+var SLIDES = [
+  { section:"A", sectionTitle:"认识数据处理", title:"单元导入：健康餐盘调查", std:"P.105 单元情境",
+    goal:"通过「开餐厅」情境，理解为什么要收集、整理资料，为学习数据处理做准备。",
+    tip:"可引导学生分组进行专题作业学习法，以开餐厅为题制定食物的餐单；增广部分可搜索「食物金字塔」和「马来西亚健康餐盘」，认识健康饮食概念。",
+    kind: kindIntro },
+
+  { section:"A", sectionTitle:"认识数据处理", title:"收集、分类和整理数据", std:"9.1.1 · P.106",
+    goal:"能把资料分类，并用记数符号整理成统计表。",
+    tip:"引导学生以记数符号和圆形分数图（饼分图的导入）整理数据；可要求学生收集有关蛋白质食物、蔬菜和水果的数据，引导他们把食物分类，如把蛋白质食物分类为鱼、鸡、肉、蛋和豆类。（活动本第147至148页）",
+    kind: kindClassifyIntro },
+
+  { section:"B", sectionTitle:"饼分图", title:"饼分图①：认识饼分图", std:"9.2.1 · P.107",
+    goal:"认识饼分图是由几个扇形组成整个圆的统计图，能读出各部分代表的数量。",
+    tip:"从圆形分数图导入饼分图，让学生理解扇形的大小（面积）代表各部分占整体的比例；引导学生根据图例说出饼分图里的资料。增广：启发学生说出数据所隐含的信息，如种植果树能绿化环境、遮荫、果实可食用等，用途多，所以数量最多。",
+    kind: kindPieIntro },
+
+  { section:"B", sectionTitle:"饼分图", title:"饼分图②：交通工具", std:"9.2.1 · P.108",
+    goal:"能读懂饼分图并进行比较（多、少）与简单估算。",
+    tip:"引导学生根据图例说出饼分图里的资料；让学生说出「其他」交通工具包括哪些，然后以「多于……」或「少于……」估计骑自行车上学的学生人数。（活动本第149至150页）",
+    kind: kindPieRead2 },
+
+  { section:"B", sectionTitle:"饼分图", title:"饼分图③：数字拖拖看", std:"9.2.1 互动练习",
+    goal:"能根据扇形大小估计各部分的相对数量，并用拖拽的方式完成配对。",
+    tip:"新增互动题型：这一页只给水果名称，不给数量，请学生根据扇形大小估一估、猜一猜，再把数字卡拖到对应格子；答错也没关系，鼓励学生说出判断依据（哪个扇形看起来最大/最小）。",
+    kind: kindPieDragMatch },
+
+  { section:"C", sectionTitle:"统计图的选择", title:"三种统计图比一比①", std:"9.3.1 · P.109",
+    goal:"认识象形统计图、条形统计图、饼分图三种统计图，理解它们能表示同一组资料。",
+    tip:"引导学生说出每种统计图里的信息，并讨论：哪幅图用图案显示信息？哪幅图清楚显示每队答对的题数？哪幅图能看出各队与总数的关系？",
+    kind: kindThreeCharts },
+
+  { section:"C", sectionTitle:"统计图的选择", title:"三种统计图比一比②", std:"9.3.1 · P.110",
+    goal:"通过第二个例子，进一步比较三种统计图的优缺点，并认识信息图 (Infographic) 的概念。",
+    tip:"提醒学生根据功能选择合适的统计图来展示数据：象形统计图用图案显示数据，直观易懂；条形统计图能清楚地显示每项数据的值；饼分图能显示各部分与整体的关系。（活动本第151至152页）",
+    kind: kindThreeCharts2 },
+
+  { section:"C", sectionTitle:"统计图的选择", title:"选出最合适的统计图", std:"9.3.1 综合练习",
+    goal:"能根据不同情境，判断哪一种统计图最合适。",
+    tip:"引导学生思考：想生动有趣→象形统计图；想精确比较数字→条形统计图；想看部分与整体的关系→饼分图。",
+    kind: kindChooseChart },
+
+  { section:"C", sectionTitle:"统计图的选择", title:"统计图判断：多选大挑战", std:"9.3.1 互动练习",
+    goal:"能辨别关于各类统计图的多项叙述，理解每种统计图的正确用法与限制。",
+    tip:"新增互动题型：多选题，答案可能不只一个，提醒学生逐项判断，不要看到一个对的就急着提交；提交后可让答错的学生说说自己是怎么想的，趁机澄清迷思概念（如「饼分图能看出先后顺序」是错的）。",
+    kind: kindMultiQuiz },
+
+  { section:"D", sectionTitle:"解决问题", title:"解决问题①：审题四步", std:"9.4.1 · P.111",
+    goal:"能按「审题、拟定策略、进行策略、验算」四个步骤，运用饼分图的资料解决应用题。",
+    tip:"引导学生制作有系统的图表以解答问题；替代方案：引导学生重温一年级科学以检查吸水能力的分类。",
+    kind: kindWordProblem },
+
+  { section:"D", sectionTitle:"解决问题", title:"解决问题②：图表填空与分类", std:"9.4.1 · P.112",
+    goal:"能运用加减法求出统计图中缺少的数量；能用不同方法把图形分类整理成统计表。",
+    tip:"第2题：提示学生条形统计图各项加起来应等于总人数，用总数减去已知各项求出缺少的一项；第3题：提示学生应用单元7空间所学过的图形知识，讨论还有什么分类法。",
+    kind: kindFillBlank },
+
+  { section:"D", sectionTitle:"解决问题", title:"图形分类整理", std:"9.4.1 · P.112 延伸",
+    goal:"能把平面图形按不同标准（形状、颜色）分类，整理成统计表。",
+    tip:"鼓励学生说出至少两种分类方法，并动手数一数、填写统计表，体会「同一组资料可以有不同分类方式」。",
+    kind: kindClassifyShapes },
+
+  { section:"D", sectionTitle:"解决问题", title:"解决问题③：饼分图反推", std:"9.4.1 · P.113",
+    goal:"能根据线索（顺序、最高最低值、两项之差）逆向推理，完成饼分图。",
+    tip:"引导学生逆向思考，通过分析信息线索逐步排除、锁定每个扇形对应的数值；提醒学生此类题目答案可能不只一组，只要说得出合理依据即可。（活动本第153至156页）",
+    kind: kindPieDeduce },
+
+  { section:"D", sectionTitle:"解决问题", title:"排序挑战：从多到少", std:"9.4.1 互动练习",
+    goal:"能根据统计图的数量，把几个类别按大小顺序排列，巩固比较与排序的概念。",
+    tip:"新增互动题型：拖拽排序题，请学生先看长条图估计名次，再拖卡片排列；也可以请学生说说「怎么一眼看出第一名」（找最高的长条）。",
+    kind: kindSortChallenge },
+
+  { section:"E", sectionTitle:"生活应用与总结", title:"生活与数学 · 轻松乐（网课互动版）", std:"P.114-116",
+    goal:"用虚拟抛硬币模拟器体验「轻松乐」的概率活动，观察正面、背面次数的规律，并用统计图整理结果。",
+    tip:"网课替代实体教具：原课本的「架子承重实验」和「实体抛硬币」不便于线上进行，改为虚拟抛硬币模拟器——请几位同学轮流点击按钮抛硬币，全班观察正面/背面次数是否随次数增加而接近一半一半；也可以先请学生「猜一猜」结果再公布，增加互动感。若仍想教STEM架子活动，可留作课后实体作业，把测试结果发到班级群组分享。",
+    kind: kindStemFun },
+
+  { section:"E", sectionTitle:"生活应用与总结", title:"英文生字总结", std:"Data Handling 词汇表",
+    goal:"掌握本单元「数据处理」相关的中英文重点词汇。",
+    tip:"可作为课堂板书或听写练习，鼓励学生用英文词汇描述统计图的组成部分和解题步骤。",
+    kind: kindVocab }
+];
+
+/* ============ APP WIRING ============ */
+var current = 0;
+var sidebar = $("sidebar");
+var sections = [];
+SLIDES.forEach(function(s,i){
+  var last = sections[sections.length-1];
+  if (!last || last.key!==s.section){ sections.push({key:s.section, title:s.sectionTitle, items:[]}); }
+  sections[sections.length-1].items.push(i);
+});
+
+function buildSidebar(){
+  clearEl(sidebar);
+  var brand = el("div","sb-brand");
+  var badge = el("div","sb-badge","📊");
+  var textWrap = document.createElement("div");
+  textWrap.appendChild(el("div","sb-sub","三年级数学 · 单元九"));
+  textWrap.appendChild(el("div","sb-title display","数据处理课堂手册"));
+  brand.appendChild(badge); brand.appendChild(textWrap);
+  sidebar.appendChild(brand);
+  sections.forEach(function(sec){
+    sidebar.appendChild(el("div","sb-section-title", sec.title));
+    var box = el("div","sb-section");
+    sec.items.forEach(function(i){
+      var item = el("div","sb-item");
+      item.appendChild(el("div","sb-num", String(i+1)));
+      var titleEl = el("div","",SLIDES[i].title);
+      item.appendChild(titleEl);
+      item.addEventListener("click", function(){ goTo(i); closeSidebarMobile(); });
+      item.dataset.idx = i;
+      box.appendChild(item);
+    });
+    sidebar.appendChild(box);
+  });
+}
+function updateSidebarActive(){
+  sidebar.querySelectorAll(".sb-item").forEach(function(it){ it.classList.toggle("active", Number(it.dataset.idx)===current); });
+}
+function render(){
+  var s = SLIDES[current];
+  $("crumb").innerHTML = s.sectionTitle + " <b>›</b> " + s.title;
+  $("slideTag").textContent = "第 " + (current+1) + " 页 · " + s.sectionTitle;
+  $("slideTitle").textContent = s.title;
+  $("slideGoal").textContent = "🎯 学习目标：" + s.goal;
+  var tipPanel = $("tipPanel");
+  tipPanel.innerHTML = "";
+  tipPanel.appendChild(el("div","",s.tip));
+  tipPanel.appendChild(el("div","std","参考重点：" + s.std));
+  tipPanel.classList.remove("show");
+  $("tipToggle").textContent = "💡 教学提示（给老师看）";
+  var stage = $("stage");
+  clearEl(stage);
+  s.kind(stage);
+  $("progressTxt").textContent = (current+1) + " / " + SLIDES.length;
+  $("prevBtn").disabled = current===0;
+  $("nextBtn").disabled = current===SLIDES.length-1;
+  $("nextBtn").textContent = current===SLIDES.length-1 ? "已是最后一页" : "下一页 →";
+  updateSidebarActive();
+  window.scrollTo({top:0});
+}
+function goTo(i){ current = Math.max(0, Math.min(SLIDES.length-1, i)); render(); }
+$("prevBtn").addEventListener("click", function(){ goTo(current-1); });
+$("nextBtn").addEventListener("click", function(){ goTo(current+1); });
+document.addEventListener("keydown", function(e){ if(e.key==="ArrowRight") goTo(current+1); if(e.key==="ArrowLeft") goTo(current-1); });
+$("tipToggle").addEventListener("click", function(){ var p=$("tipPanel"); p.classList.toggle("show"); this.textContent = p.classList.contains("show") ? "🙈 隐藏教学提示" : "💡 教学提示（给老师看）"; });
+var stageOn=false;
+$("stageToggle").addEventListener("click", function(){ stageOn=!stageOn; document.body.classList.toggle("stage-mode", stageOn); this.classList.toggle("on", stageOn); $("stageLabel").textContent = stageOn ? "退出大屏" : "大屏模式"; });
+function closeSidebarMobile(){ $("sidebar").classList.remove("open"); }
+$("menuToggle").addEventListener("click", function(){ $("sidebar").classList.toggle("open"); });
+
+/* ---------------- 举手统计（用 Supabase 做实时投票，学生不需要登录） ---------------- */
+var SUPABASE_URL = "https://lfxabwakcthzcntqvbiy.supabase.co";
+var SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxmeGFid2FrY3RoemNudHF2Yml5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg4OTk1NTYsImV4cCI6MjEwNDQ3NTU1Nn0.O_5ut2mniPLTgeQ4Cy81_LhOVkgnwfALa7YVAA9PB30";
+var pollClient = null;
+var pollChannel = null;
+var pollVersion = 0;
+
+function initPoll(){
+  if (typeof window.supabase === "undefined") return;
+  try {
+    pollClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    $("pollBtn").hidden = false;
+  } catch(e){ /* Supabase unreachable — keep the button hidden, rest of the manual still works */ }
+}
+
+function scrapeCurrentQuestion(){
+  var qEls = document.querySelectorAll("#stage .display:not(.num)");
+  var qText = qEls.length ? qEls[qEls.length-1].textContent : "";
+  var optEls = document.querySelectorAll("#stage .choices .choice");
+  var opts = Array.prototype.map.call(optEls, function(b){ return b.textContent; });
+  return { question: qText, options: opts };
+}
+
+function openPollPanel(){
+  $("pollOverlay").classList.add("show");
+  var scraped = scrapeCurrentQuestion();
+  var body = $("pollBody");
+  clearEl(body);
+  if (!scraped.options.length){
+    body.appendChild(el("div","poll-empty","当前这一页没有选择题选项（数字键盘、拖拽题暂不支持举手统计），请切换到有选项的题目再试一次。"));
+    return;
+  }
+  body.appendChild(el("div","poll-q", scraped.question || "（本题）"));
+  body.appendChild(el("div","poll-total","学生打开「举手统计」网址后会看到这一题，点选后老师这边会实时看到统计结果。"));
+  var sendBtn = el("button","poll-send","🚀 发送给学生作答"); sendBtn.type="button";
+  sendBtn.addEventListener("click", function(){ sendPoll(scraped); });
+  var actionRow = el("div","poll-actions"); actionRow.appendChild(sendBtn);
+  body.appendChild(actionRow);
+}
+
+function sendPoll(scraped){
+  if (!pollClient) return;
+  pollVersion += 1;
+  var thisVersion = pollVersion;
+  var body = $("pollBody");
+  clearEl(body);
+  body.appendChild(el("div","poll-q", scraped.question || "（本题）"));
+  var tally = {}; scraped.options.forEach(function(o){ tally[o]=0; });
+  var rowEls = {};
+  var barsWrap = el("div","poll-opts");
+  scraped.options.forEach(function(o){
+    var row = el("div","poll-opt-row");
+    row.appendChild(el("div","poll-opt-label", o));
+    var track = el("div","poll-bar-track");
+    var fill = el("div","poll-bar-fill",""); fill.style.width="0%";
+    track.appendChild(fill);
+    row.appendChild(track);
+    var count = el("div","poll-count","0");
+    row.appendChild(count);
+    rowEls[o] = {fill:fill, count:count};
+    barsWrap.appendChild(row);
+  });
+  body.appendChild(barsWrap);
+  var totalEl = el("div","poll-total","正在发送给学生…");
+  body.appendChild(totalEl);
+
+  function renderTally(){
+    var total = 0; Object.keys(tally).forEach(function(k){ total += tally[k]; });
+    var max = 1; Object.keys(tally).forEach(function(k){ if (tally[k]>max) max=tally[k]; });
+    Object.keys(tally).forEach(function(o){
+      var pct = Math.round(tally[o]/max*100);
+      if (rowEls[o]){ rowEls[o].fill.style.width = pct+"%"; rowEls[o].count.textContent = String(tally[o]); }
+    });
+    totalEl.textContent = "已提交："+total+" 人";
+  }
+
+  pollClient.from("live_poll").upsert({ id:"current", version:thisVersion, question:scraped.question, options:scraped.options, updated_at:new Date().toISOString() }).then(function(res){
+    if (res.error){ totalEl.textContent = "发送失败："+res.error.message; return; }
+    if (pollChannel){ pollClient.removeChannel(pollChannel); }
+    renderTally();
+    pollChannel = pollClient.channel("live-votes-"+thisVersion)
+      .on("postgres_changes", { event:"INSERT", schema:"public", table:"live_votes", filter:"version=eq."+thisVersion }, function(payload){
+        var choice = payload.new && payload.new.choice;
+        if (choice && tally.hasOwnProperty(choice)){ tally[choice] += 1; renderTally(); }
+      })
+      .subscribe();
+  }).catch(function(){ totalEl.textContent = "发送失败，请检查网络。"; });
+}
+
+$("pollBtn").addEventListener("click", openPollPanel);
+$("pollCloseBtn").addEventListener("click", function(){
+  $("pollOverlay").classList.remove("show");
+});
+initPoll();
+
+buildSidebar();
+render();
+
+})();
+</script>
+
+</body>
+</html>
