@@ -12,13 +12,17 @@
   create table if not exists live_board (
     id text primary key default 'current',
     version int not null default 0,
-    drawing_enabled boolean not null default false,
+    allowed_client_ids jsonb not null default '[]'::jsonb,
     snapshot text,
     updated_at timestamptz not null default now()
   );
-  insert into live_board (id, version, drawing_enabled)
-    values ('current', 0, false)
+  insert into live_board (id, version, allowed_client_ids)
+    values ('current', 0, '[]'::jsonb)
     on conflict (id) do nothing;
+
+  -- 如果之前已经建过 live_board 表（旧版本用的是 drawing_enabled 布尔栏位），
+  -- 只需要多跑这一行，把新栏位加上去就好，不用重建整张表：
+  -- alter table live_board add column if not exists allowed_client_ids jsonb not null default '[]'::jsonb;
 
   alter table live_board enable row level security;
 
@@ -33,9 +37,15 @@
   grant select, insert, update on live_board to anon;
 
   跑完以上 SQL 后，记得到 Database → Publications，把 live_board 这张表
-  也加进 supabase_realtime，不然「开放学生绘图」开关和老师清空/换背景时，
-  学生端不会自动更新（要手动刷新才看得到）。画笔笔画本身是用 Supabase
-  Realtime 的「广播」(broadcast) 即时传送的，不需要额外设置。
+  也加进 supabase_realtime，不然老师授权、清空/换背景时，学生端不会自动
+  更新（要手动刷新才看得到）。画笔笔画本身是用 Supabase Realtime 的
+  「广播」(broadcast) 即时传送的，不需要额外设置；学生名单则是用
+  Supabase Realtime 的「presence」功能即时显示，同样不需要额外设置。
+
+  权限模式：学生进入这个页面时会先输入名字，老师在课堂手册的「共享白板」
+  面板里会看到即时更新的在线学生名单，勾选哪个学生的名字，那个学生才能
+  画；没被勾选的学生只能看，不能画（但大家都看得到老师和被授权同学正在
+  画的内容）。
 
   部署方式：把这个文件跟 index.html、y3-unit9-vote.html、
   y3-unit9-lesson-vercel.html 放在同一个 GitHub 仓库根目录下，一起推上
@@ -56,8 +66,21 @@
     font-family:"Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
     display:flex; flex-direction:column;
   }
+  .name-gate{ flex:1; display:flex; align-items:center; justify-content:center; padding:24px; }
+  .name-card{ background:var(--panel); border-radius:24px; box-shadow:var(--shadow); padding:28px 24px; max-width:360px; width:100%; text-align:center; }
+  .name-card .badge{ font-size:34px; margin-bottom:8px; }
+  .name-card h1{ font-size:18px; margin:0 0 6px; }
+  .name-card p{ font-size:13px; color:var(--ink-soft); margin:0 0 18px; }
+  .name-input{ width:100%; font:inherit; font-size:16px; padding:12px 14px; border-radius:14px; border:2px solid var(--line); text-align:center; margin-bottom:12px; }
+  .name-input:focus{ outline:none; border-color:var(--primary); }
+  .name-go{ width:100%; font:inherit; font-weight:800; font-size:15px; background:var(--primary); color:#fff; border:none; border-radius:14px; padding:12px; cursor:pointer; }
+  .name-go[disabled]{ opacity:.5; cursor:default; }
+  .name-err{ font-size:12px; color:#B4242E; min-height:16px; margin-top:6px; }
+
   .topbar{ display:flex; align-items:center; justify-content:space-between; gap:10px; padding:12px 16px; background:var(--panel); border-bottom:1px solid var(--line); }
   .title{ font-weight:800; font-size:16px; }
+  .title .me{ font-weight:700; font-size:12px; color:var(--ink-soft); margin-left:6px; }
+  .title .me button{ font:inherit; border:none; background:none; color:var(--primary); text-decoration:underline; cursor:pointer; padding:0; margin-left:4px; }
   .status{ font-size:12.5px; font-weight:700; color:var(--ink-soft); }
   .status.live{ color:#0B4A45; }
   .toolbar{ display:flex; align-items:center; gap:10px; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--line); flex-wrap:wrap; }
@@ -75,8 +98,19 @@
 </style>
 </head>
 <body>
-  <div class="topbar">
-    <div class="title">📝 共享白板</div>
+  <div class="name-gate" id="nameGate">
+    <div class="name-card">
+      <div class="badge">🖐️</div>
+      <h1>加入共享白板</h1>
+      <p>请输入你的名字，老师会看到你的名字，才能授权你一起画。</p>
+      <input class="name-input" id="nameInput" type="text" maxlength="12" placeholder="例如：小明">
+      <button class="name-go" id="nameGoBtn" type="button">进入白板</button>
+      <div class="name-err" id="nameErr"></div>
+    </div>
+  </div>
+
+  <div class="topbar" id="topbar" hidden>
+    <div class="title">📝 共享白板<span class="me" id="meLabel"></span></div>
     <div class="status" id="statusText">正在连线…</div>
   </div>
   <div class="toolbar" id="toolbar" hidden>
@@ -86,9 +120,9 @@
     <button class="color" data-color="#5AC8FA" style="background:#5AC8FA" type="button" aria-label="蓝色"></button>
     <button class="eraser" id="eraserBtn" type="button">🧹 橡皮擦</button>
   </div>
-  <div class="canvas-wrap">
+  <div class="canvas-wrap" id="canvasWrap" hidden>
     <canvas id="boardCanvas" width="640" height="400"></canvas>
-    <div class="viewonly" id="viewonlyBanner" hidden>老师还没开放绘图，你现在只能看老师画 👀</div>
+    <div class="viewonly" id="viewonlyBanner" hidden>老师还没授权你绘图，你现在只能看 👀</div>
     <div class="waiting" id="waitingBanner"><span>正在连线<span class="dot"></span><span class="dot"></span><span class="dot"></span></span></div>
   </div>
 
@@ -98,7 +132,16 @@
     "use strict";
     var SUPABASE_URL = "https://lfxabwakcthzcntqvbiy.supabase.co";
     var SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxmeGFid2FrY3RoemNudHF2Yml5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg4OTk1NTYsImV4cCI6MjEwNDQ3NTU1Nn0.O_5ut2mniPLTgeQ4Cy81_LhOVkgnwfALa7YVAA9PB30";
+    var NAME_KEY = "y3board_name";
+    var CLIENT_KEY = "y3board_client_id";
 
+    var nameGate = document.getElementById("nameGate");
+    var nameInput = document.getElementById("nameInput");
+    var nameGoBtn = document.getElementById("nameGoBtn");
+    var nameErr = document.getElementById("nameErr");
+    var topbar = document.getElementById("topbar");
+    var meLabel = document.getElementById("meLabel");
+    var canvasWrap = document.getElementById("canvasWrap");
     var canvas = document.getElementById("boardCanvas");
     var ctx = canvas.getContext("2d");
     var statusEl = document.getElementById("statusText");
@@ -106,15 +149,21 @@
     var viewonlyEl = document.getElementById("viewonlyBanner");
     var waitingEl = document.getElementById("waitingBanner");
 
+    var myName = "";
+    var myClientId = "";
     var client = null;
     var channel = null;
+    var presenceChannel = null;
     var boardVersion = 0;
+    var allowedIds = [];
     var drawingEnabled = false;
     var color = "#2B2A33";
     var erasing = false;
     var isDrawing = false;
     var lastPos = null;
     var snapshotTimer = null;
+
+    function makeClientId(){ return Math.random().toString(36).slice(2) + Date.now().toString(36); }
 
     function getPos(e){
       var rect = canvas.getBoundingClientRect();
@@ -176,7 +225,7 @@
     function saveSnapshot(){
       if (!client) return;
       var dataUrl = canvas.toDataURL("image/jpeg", 0.6);
-      client.from("live_board").upsert({ id:"current", version:boardVersion, drawing_enabled:drawingEnabled, snapshot:dataUrl, updated_at:new Date().toISOString() });
+      client.from("live_board").upsert({ id:"current", version:boardVersion, snapshot:dataUrl, updated_at:new Date().toISOString() });
     }
 
     function loadImage(dataUrl, cb){
@@ -195,7 +244,8 @@
 
     function applyRow(row){
       if (!row) return;
-      drawingEnabled = !!row.drawing_enabled;
+      allowedIds = Array.isArray(row.allowed_client_ids) ? row.allowed_client_ids : [];
+      drawingEnabled = allowedIds.indexOf(myClientId) >= 0;
       updatePermissionUI();
       if (row.version !== boardVersion){
         boardVersion = row.version;
@@ -218,7 +268,12 @@
       document.querySelectorAll(".color").forEach(function(b){ b.classList.remove("active"); });
     });
 
-    function init(){
+    function startBoard(){
+      nameGate.hidden = true;
+      topbar.hidden = false;
+      canvasWrap.hidden = false;
+      meLabel.textContent = "· 你是「" + myName + "」";
+
       if (typeof window.supabase === "undefined"){
         statusEl.textContent = "连不上服务器，请检查网络后重新整理页面。";
         waitingEl.querySelector("span").textContent = "连不上服务器，请检查网络";
@@ -251,6 +306,37 @@
           applyRow(payload.new);
         })
         .subscribe();
+
+      presenceChannel = client.channel("board-presence", { config: { presence: { key: myClientId } } });
+      presenceChannel.subscribe(function(status){
+        if (status === "SUBSCRIBED") presenceChannel.track({ name: myName, client_id: myClientId });
+      });
+    }
+
+    function tryStart(){
+      var v = nameInput.value.trim();
+      if (!v){ nameErr.textContent = "请输入名字再进入。"; return; }
+      myName = v.slice(0, 12);
+      try { localStorage.setItem(NAME_KEY, myName); } catch(e){}
+      startBoard();
+    }
+    nameGoBtn.addEventListener("click", tryStart);
+    nameInput.addEventListener("keydown", function(e){ if (e.key === "Enter") tryStart(); });
+
+    function init(){
+      try {
+        myClientId = localStorage.getItem(CLIENT_KEY) || "";
+        if (!myClientId){ myClientId = makeClientId(); localStorage.setItem(CLIENT_KEY, myClientId); }
+      } catch(e){ myClientId = makeClientId(); }
+
+      var savedName = "";
+      try { savedName = localStorage.getItem(NAME_KEY) || ""; } catch(e){}
+      if (savedName){
+        myName = savedName;
+        startBoard();
+      } else {
+        nameInput.focus();
+      }
     }
 
     init();
