@@ -155,6 +155,7 @@
     var channel = null;
     var presenceChannel = null;
     var boardVersion = 0;
+    var boardStateLoaded = false;
     var allowedIds = [];
     var drawingEnabled = false;
     var color = "#2B2A33";
@@ -162,6 +163,10 @@
     var isDrawing = false;
     var lastPos = null;
     var snapshotTimer = null;
+    var boardStrokes = []; // {id, owner, color, size, pts:[{x,y},...]}
+    var boardBgImage = null;
+    var currentStroke = null;
+    var ERASE_RADIUS = 30; // 橡皮擦命中判定半径（配合 1280x800 画板分辨率）
 
     function makeClientId(){ return Math.random().toString(36).slice(2) + Date.now().toString(36); }
 
@@ -174,10 +179,10 @@
       return { x:(clientX-rect.left)*scaleX, y:(clientY-rect.top)*scaleY };
     }
 
-    function drawSegment(x0,y0,x1,y1,c,size,erase){
+    function drawSegment(x0,y0,x1,y1,c,size){
       ctx.save();
       ctx.lineCap = "round"; ctx.lineJoin = "round";
-      ctx.globalCompositeOperation = erase ? "destination-out" : "source-over";
+      ctx.globalCompositeOperation = "source-over";
       ctx.strokeStyle = c;
       ctx.lineWidth = size;
       ctx.beginPath();
@@ -187,31 +192,111 @@
       ctx.restore();
     }
 
-    function broadcastStroke(x0,y0,x1,y1,c,size,erase){
+    function redrawBoard(){
+      ctx.fillStyle = "#ffffff"; ctx.fillRect(0,0,canvas.width,canvas.height);
+      if (boardBgImage){
+        var bw = boardBgImage.width, bh = boardBgImage.height;
+        if (bw && bh){
+          var ratio = Math.min(canvas.width/bw, canvas.height/bh);
+          var w = bw*ratio, h = bh*ratio;
+          var offX = (canvas.width-w)/2, offY = (canvas.height-h)/2;
+          ctx.drawImage(boardBgImage, offX, offY, w, h);
+        }
+      }
+      boardStrokes.forEach(function(s){
+        if (!s.pts || !s.pts.length) return;
+        ctx.save();
+        ctx.lineCap = "round"; ctx.lineJoin = "round";
+        ctx.globalCompositeOperation = "source-over";
+        ctx.strokeStyle = s.color; ctx.lineWidth = s.size;
+        if (s.pts.length === 1){
+          ctx.beginPath();
+          ctx.arc(s.pts[0].x, s.pts[0].y, s.size/2, 0, Math.PI*2);
+          ctx.fillStyle = s.color; ctx.fill();
+        } else {
+          ctx.beginPath();
+          ctx.moveTo(s.pts[0].x, s.pts[0].y);
+          for (var i=1;i<s.pts.length;i++) ctx.lineTo(s.pts[i].x, s.pts[i].y);
+          ctx.stroke();
+        }
+        ctx.restore();
+      });
+    }
+
+    function distToSeg(px,py,x1,y1,x2,y2){
+      var dx=x2-x1, dy=y2-y1;
+      var lenSq = dx*dx+dy*dy;
+      var t = lenSq ? ((px-x1)*dx+(py-y1)*dy)/lenSq : 0;
+      t = Math.max(0, Math.min(1, t));
+      var cx = x1+t*dx, cy = y1+t*dy;
+      return Math.hypot(px-cx, py-cy);
+    }
+    function strokeHit(stroke, px, py, radius){
+      if (!stroke.pts || !stroke.pts.length) return false;
+      if (stroke.pts.length === 1){
+        return Math.hypot(px-stroke.pts[0].x, py-stroke.pts[0].y) <= radius;
+      }
+      for (var i=1;i<stroke.pts.length;i++){
+        if (distToSeg(px,py,stroke.pts[i-1].x,stroke.pts[i-1].y,stroke.pts[i].x,stroke.pts[i].y) <= radius) return true;
+      }
+      return false;
+    }
+
+    /* 学生的橡皮擦只能擦自己画的部分——背景图和别人（老师、其他同学）画的东西都擦不到 */
+    function eraseBoardAt(pos){
+      var changed = false;
+      for (var i = boardStrokes.length-1; i>=0; i--){
+        var s = boardStrokes[i];
+        if (s.owner !== myClientId) continue;
+        if (strokeHit(s, pos.x, pos.y, ERASE_RADIUS + s.size/2)){
+          boardStrokes.splice(i,1);
+          broadcastErase(s.id);
+          changed = true;
+        }
+      }
+      if (changed) redrawBoard();
+    }
+
+    function broadcastStroke(strokeId, owner, x0,y0,x1,y1,c,size){
       if (!channel) return;
-      channel.send({ type:"broadcast", event:"stroke", payload:{x0:x0,y0:y0,x1:x1,y1:y1,color:c,size:size,erase:!!erase} });
+      channel.send({ type:"broadcast", event:"stroke", payload:{strokeId:strokeId, owner:owner, x0:x0,y0:y0,x1:x1,y1:y1,color:c,size:size} });
+    }
+    function broadcastErase(strokeId){
+      if (!channel) return;
+      channel.send({ type:"broadcast", event:"eraseStroke", payload:{strokeId:strokeId} });
     }
 
     function onPointerDown(e){
       if (!drawingEnabled) return;
       e.preventDefault();
       isDrawing = true;
-      lastPos = getPos(e);
+      var pos = getPos(e);
+      lastPos = pos;
+      if (erasing){
+        eraseBoardAt(pos);
+      } else {
+        currentStroke = { id: myClientId+"-"+Date.now()+"-"+Math.random().toString(36).slice(2), owner: myClientId, color: color, size: 8, pts:[pos] };
+        boardStrokes.push(currentStroke);
+      }
     }
     function onPointerMove(e){
       if (!isDrawing || !drawingEnabled) return;
       e.preventDefault();
       var pos = getPos(e);
-      var c = erasing ? "#000000" : color;
-      var size = erasing ? 44 : 8;
-      drawSegment(lastPos.x, lastPos.y, pos.x, pos.y, c, size, erasing);
-      broadcastStroke(lastPos.x, lastPos.y, pos.x, pos.y, c, size, erasing);
+      if (erasing){
+        eraseBoardAt(pos);
+      } else if (currentStroke){
+        currentStroke.pts.push(pos);
+        drawSegment(lastPos.x, lastPos.y, pos.x, pos.y, currentStroke.color, currentStroke.size);
+        broadcastStroke(currentStroke.id, currentStroke.owner, lastPos.x, lastPos.y, pos.x, pos.y, currentStroke.color, currentStroke.size);
+      }
       lastPos = pos;
     }
     function onPointerUp(){
       if (!isDrawing) return;
       isDrawing = false;
       lastPos = null;
+      currentStroke = null;
       scheduleSnapshot();
     }
     canvas.addEventListener("pointerdown", onPointerDown);
@@ -229,10 +314,9 @@
     }
 
     function loadImage(dataUrl, cb){
-      ctx.fillStyle = "#ffffff"; ctx.fillRect(0,0,canvas.width,canvas.height);
-      if (!dataUrl){ if (cb) cb(); return; }
+      if (!dataUrl){ boardBgImage = null; redrawBoard(); if (cb) cb(); return; }
       var img = new Image();
-      img.onload = function(){ ctx.drawImage(img,0,0,canvas.width,canvas.height); if (cb) cb(); };
+      img.onload = function(){ boardBgImage = img; redrawBoard(); if (cb) cb(); };
       img.onerror = function(){ if (cb) cb(); };
       img.src = dataUrl;
     }
@@ -242,13 +326,18 @@
       viewonlyEl.hidden = drawingEnabled;
     }
 
+    /* 每次跟服务器对齐状态时，只有版本真的变了（老师把统计图设成背景，或清空了画板）
+       才会重置成新的「压平底图」，避免重复叠图，也避免让「只能擦自己的」失效。 */
     function applyRow(row){
       if (!row) return;
       allowedIds = Array.isArray(row.allowed_client_ids) ? row.allowed_client_ids : [];
       drawingEnabled = allowedIds.indexOf(myClientId) >= 0;
       updatePermissionUI();
-      if (row.version !== boardVersion){
-        boardVersion = row.version;
+      var v = row.version || 0;
+      if (!boardStateLoaded || v !== boardVersion){
+        boardVersion = v;
+        boardStrokes = [];
+        boardStateLoaded = true;
         loadImage(row.snapshot);
       }
     }
@@ -297,7 +386,18 @@
       channel = client.channel("board-live")
         .on("broadcast", { event:"stroke" }, function(msg){
           var p = msg.payload;
-          if (p) drawSegment(p.x0,p.y0,p.x1,p.y1,p.color,p.size,p.erase);
+          if (!p) return;
+          var stroke = null;
+          for (var i=0;i<boardStrokes.length;i++){ if (boardStrokes[i].id===p.strokeId){ stroke=boardStrokes[i]; break; } }
+          if (!stroke){ stroke = { id:p.strokeId, owner:p.owner, color:p.color, size:p.size, pts:[{x:p.x0,y:p.y0}] }; boardStrokes.push(stroke); }
+          stroke.pts.push({x:p.x1,y:p.y1});
+          drawSegment(p.x0,p.y0,p.x1,p.y1,p.color,p.size);
+        })
+        .on("broadcast", { event:"eraseStroke" }, function(msg){
+          var p = msg.payload;
+          if (!p) return;
+          for (var i=0;i<boardStrokes.length;i++){ if (boardStrokes[i].id===p.strokeId){ boardStrokes.splice(i,1); break; } }
+          redrawBoard();
         })
         .subscribe();
 
