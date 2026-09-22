@@ -25,6 +25,16 @@
 
   共享白板需要额外建一张 Supabase 表（SQL、RLS、GRANT 语句、Realtime
   设置说明都写在 y3-unit9-board.html 文件最上面的注释里，请照着跑一遍）。
+
+  【2026-08 更新：白板改成「按学生授权」】
+  白板不再是「全班一起画 / 全班都不能画」的开关，改成老师在白板面板里
+  看到一份实时更新的在线学生名单（学生进入 y3-unit9-board.html 前要先
+  输入名字），老师勾选某个学生，才授权那个学生画，其他学生只能看。
+  这需要把 live_board 表加一个新字段，如果你的 Supabase 项目是照旧版
+  说明建的表（只有 drawing_enabled 字段），请在 SQL Editor 再跑一次：
+    alter table live_board add column if not exists
+      allowed_client_ids jsonb not null default '[]'::jsonb;
+  旧的 drawing_enabled 字段留着不影响，可以之后手动删除，不删也没关系。
   =====================================================================
 -->
 <style>
@@ -231,6 +241,20 @@
   .board-viewonly{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,.75); font-weight:800; font-size:15px; color:var(--ink-soft); text-align:center; padding:20px; }
   .board-footer{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:14px; flex-wrap:wrap; }
 
+  .board-roster{ margin-top:16px; border-top:1px dashed var(--line); padding-top:14px; }
+  .board-roster-head{ display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; margin-bottom:10px; }
+  .board-roster-title{ font-weight:800; font-size:13.5px; color:var(--ink); }
+  .board-roster-actions{ display:flex; gap:8px; flex-wrap:wrap; }
+  .board-roster-list{ display:flex; flex-direction:column; gap:6px; max-height:180px; overflow-y:auto; }
+  .board-roster-empty{ font-size:12.5px; color:var(--ink-soft); padding:8px 2px; }
+  .board-roster-item{ display:flex; align-items:center; gap:10px; padding:8px 12px; border-radius:12px; background:var(--bg-soft); border:1px solid var(--line); cursor:pointer; }
+  .board-roster-item input[type="checkbox"]{ width:17px; height:17px; flex:none; accent-color:var(--primary); cursor:pointer; }
+  .board-roster-item .name{ font-weight:700; font-size:14px; flex:1; }
+  .board-roster-item.allowed{ background:var(--correct-bg); border-color:var(--secondary); }
+  .board-roster-item .tag{ font-size:11px; font-weight:800; color:var(--ink-soft); }
+  .board-roster-item.allowed .tag{ color:var(--secondary-ink); }
+  .board-roster-hint{ margin-top:8px; font-size:11.5px; color:var(--ink-soft); }
+
   @media (max-width: 900px){
     .sidebar{ position:fixed; left:0; top:0; bottom:0; z-index:20; transform:translateX(-100%); transition:transform .2s ease; }
     .sidebar.open{ transform:translateX(0); box-shadow:0 0 0 100vmax rgba(0,0,0,.35); }
@@ -241,10 +265,12 @@
   @media (prefers-reduced-motion: reduce){ *{ transition-duration:.001ms !important; } }
 </style>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+
 </head>
 <body>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+
 <div class="shell">
   <nav class="sidebar" id="sidebar"></nav>
   <div class="main">
@@ -306,8 +332,20 @@
     <div class="board-canvas-wrap">
       <canvas id="boardCanvas" width="640" height="400"></canvas>
     </div>
+    <div class="board-roster">
+      <div class="board-roster-head">
+        <div class="board-roster-title">🧑‍🎓 学生名单（<span id="boardRosterCount">0</span> 人在线）</div>
+        <div class="board-roster-actions">
+          <button class="board-mini-btn" id="boardAllowAllBtn" type="button">✅ 全部授权</button>
+          <button class="board-mini-btn" id="boardRevokeAllBtn" type="button">🚫 全部收回</button>
+        </div>
+      </div>
+      <div class="board-roster-list" id="boardRosterList">
+        <div class="board-roster-empty" id="boardRosterEmpty">还没有学生打开白板网址……</div>
+      </div>
+      <div class="board-roster-hint">☝️ 勾选学生名字，授权给他一起画；没勾选的学生只能看，不能画。</div>
+    </div>
     <div class="board-footer">
-      <button class="stage-toggle" id="boardShareToggle" type="button"><span class="dot"></span><span id="boardShareLabel">开放学生绘图</span></button>
       <button class="poll-close" id="boardCloseBtn" type="button">关闭</button>
     </div>
   </div>
@@ -1244,12 +1282,14 @@ $("pollCloseBtn").addEventListener("click", function(){
   $("pollOverlay").classList.remove("show");
 });
 
-/* ---------------- 共享白板（老师端：一直可以画，可开关让学生也一起画） ---------------- */
+/* ---------------- 共享白板（老师端：一直可以画，按学生名字个别授权绘图） ---------------- */
 var boardCanvas = null, boardCtx = null;
 var boardChannel = null;
+var boardPresenceChannel = null;
 var boardTableWatched = false;
 var boardVersion = 0;
-var boardDrawingEnabled = false;
+var boardAllowedIds = [];
+var boardRoster = {}; // client_id -> name，来自 Supabase Realtime presence
 var boardColor = "#2B2A33";
 var boardErasing = false;
 var boardIsDrawing = false;
@@ -1317,7 +1357,7 @@ function scheduleBoardSnapshot(){
 function saveBoardSnapshot(){
   if (!pollClient || !boardCanvas) return;
   var dataUrl = boardCanvas.toDataURL("image/jpeg", 0.6);
-  pollClient.from("live_board").upsert({ id:"current", version:boardVersion, drawing_enabled:boardDrawingEnabled, snapshot:dataUrl, updated_at:new Date().toISOString() }).then(function(res){
+  pollClient.from("live_board").upsert({ id:"current", version:boardVersion, snapshot:dataUrl, updated_at:new Date().toISOString() }).then(function(res){
     if (res.error) { /* 保存失败不影响老师这边继续画，学生端下次连线时会补上最新状态 */ }
   });
 }
@@ -1340,11 +1380,56 @@ function ensureBoardCanvas(){
   window.addEventListener("pointerup", boardPointerUp);
 }
 
-function updateBoardToggleUI(){
-  var btn = $("boardShareToggle");
-  if (!btn) return;
-  btn.classList.toggle("on", boardDrawingEnabled);
-  $("boardShareLabel").textContent = boardDrawingEnabled ? "学生可以绘图" : "开放学生绘图";
+function renderBoardRoster(){
+  var list = $("boardRosterList");
+  var ids = Object.keys(boardRoster);
+  $("boardRosterCount").textContent = String(ids.length);
+  clearEl(list);
+  if (!ids.length){
+    list.appendChild(el("div","board-roster-empty","还没有学生打开白板网址……"));
+    return;
+  }
+  ids.sort(function(a,b){ return boardRoster[a].localeCompare(boardRoster[b], "zh"); }).forEach(function(cid){
+    var isAllowed = boardAllowedIds.indexOf(cid) >= 0;
+    var item = el("div","board-roster-item" + (isAllowed ? " allowed" : ""));
+    var cb = document.createElement("input");
+    cb.type = "checkbox"; cb.checked = isAllowed;
+    cb.addEventListener("click", function(e){ e.stopPropagation(); toggleStudentAllowed(cid); });
+    item.appendChild(cb);
+    item.appendChild(el("div","name", boardRoster[cid]));
+    item.appendChild(el("div","tag", isAllowed ? "可以画" : "只能看"));
+    item.addEventListener("click", function(){ toggleStudentAllowed(cid); });
+    list.appendChild(item);
+  });
+}
+
+function persistAllowedIds(){
+  if (!pollClient) return;
+  pollClient.from("live_board").upsert({ id:"current", version:boardVersion, allowed_client_ids:boardAllowedIds, updated_at:new Date().toISOString() });
+}
+
+function toggleStudentAllowed(cid){
+  var idx = boardAllowedIds.indexOf(cid);
+  if (idx>=0) boardAllowedIds.splice(idx,1); else boardAllowedIds.push(cid);
+  renderBoardRoster();
+  persistAllowedIds();
+}
+
+function subscribeBoardPresence(){
+  if (!pollClient) return;
+  if (boardPresenceChannel) pollClient.removeChannel(boardPresenceChannel);
+  boardPresenceChannel = pollClient.channel("board-presence")
+    .on("presence", { event:"sync" }, function(){
+      var state = boardPresenceChannel.presenceState();
+      var next = {};
+      Object.keys(state).forEach(function(cid){
+        var entries = state[cid];
+        if (entries && entries.length) next[cid] = entries[0].name || "同学";
+      });
+      boardRoster = next;
+      renderBoardRoster();
+    })
+    .subscribe();
 }
 
 function subscribeBoardRealtime(){
@@ -1356,14 +1441,15 @@ function subscribeBoardRealtime(){
       if (p) boardDrawSegment(p.x0,p.y0,p.x1,p.y1,p.color,p.size,p.erase);
     })
     .subscribe();
+  subscribeBoardPresence();
   if (!boardTableWatched){
     boardTableWatched = true;
     pollClient.channel("board-row-watch")
       .on("postgres_changes", { event:"UPDATE", schema:"public", table:"live_board", filter:"id=eq.current" }, function(payload){
         var row = payload.new;
         if (!row) return;
-        boardDrawingEnabled = !!row.drawing_enabled;
-        updateBoardToggleUI();
+        boardAllowedIds = Array.isArray(row.allowed_client_ids) ? row.allowed_client_ids : [];
+        renderBoardRoster();
         if (row.version !== boardVersion){
           boardVersion = row.version;
           loadBoardImage(row.snapshot);
@@ -1380,8 +1466,8 @@ function openBoard(){
   pollClient.from("live_board").select("*").eq("id","current").maybeSingle().then(function(res){
     if (res.data){
       boardVersion = res.data.version || 0;
-      boardDrawingEnabled = !!res.data.drawing_enabled;
-      updateBoardToggleUI();
+      boardAllowedIds = Array.isArray(res.data.allowed_client_ids) ? res.data.allowed_client_ids : [];
+      renderBoardRoster();
       loadBoardImage(res.data.snapshot);
     }
     subscribeBoardRealtime();
@@ -1427,14 +1513,15 @@ document.querySelectorAll(".board-color").forEach(function(b){
     boardColor = b.dataset.color;
   });
 });
-$("boardShareToggle").addEventListener("click", function(){
-  if (!pollClient) return;
-  var next = !boardDrawingEnabled;
-  boardDrawingEnabled = next;
-  updateBoardToggleUI();
-  pollClient.from("live_board").upsert({ id:"current", version:boardVersion, drawing_enabled:next, updated_at:new Date().toISOString() }).then(function(res){
-    if (res.error){ boardDrawingEnabled = !next; updateBoardToggleUI(); }
-  });
+$("boardAllowAllBtn").addEventListener("click", function(){
+  boardAllowedIds = Object.keys(boardRoster);
+  renderBoardRoster();
+  persistAllowedIds();
+});
+$("boardRevokeAllBtn").addEventListener("click", function(){
+  boardAllowedIds = [];
+  renderBoardRoster();
+  persistAllowedIds();
 });
 
 initPoll();
