@@ -236,6 +236,7 @@
   .board-actions-row{ display:flex; gap:8px; flex-wrap:wrap; }
   .board-mini-btn{ background:var(--bg-soft); border:1px solid var(--line); border-radius:999px; padding:6px 12px; font-weight:700; font-size:12.5px; cursor:pointer; }
   .board-mini-btn:hover{ background:var(--line); }
+  .board-mini-btn.active{ background:var(--primary); color:#fff; border-color:transparent; }
   .board-canvas-wrap{ position:relative; border:2px solid var(--line); border-radius:16px; overflow:hidden; background:#fff; }
   .board-canvas-wrap canvas{ display:block; width:100%; height:auto; touch-action:none; cursor:crosshair; }
   .board-viewonly{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,.75); font-weight:800; font-size:15px; color:var(--ink-soft); text-align:center; padding:20px; }
@@ -323,10 +324,23 @@
         <button class="board-color" data-color="#2EC4B6" style="background:#2EC4B6" type="button" aria-label="绿色"></button>
         <button class="board-color" data-color="#5AC8FA" style="background:#5AC8FA" type="button" aria-label="蓝色"></button>
         <button class="board-eraser" id="boardEraser" type="button">🧹 橡皮擦</button>
+        <button class="board-mini-btn" id="boardSelectBtn" type="button">🖱️ 选取/移动</button>
       </div>
       <div class="board-actions-row">
-        <button class="board-mini-btn" id="boardBgBtn" type="button">🖼️ 把本页统计图设为背景</button>
+        <button class="board-mini-btn" id="boardBgBtn" type="button">📊 把本页统计图放上画板</button>
+        <button class="board-mini-btn" id="boardInsertImgBtn" type="button">🖼️ 插入图片</button>
+        <input type="file" id="boardImgFileInput" accept="image/*" style="display:none">
         <button class="board-mini-btn" id="boardClearBtn" type="button">🗑️ 清空画板</button>
+      </div>
+      <div class="board-actions-row" id="boardImgSelActions" hidden>
+        <button class="board-mini-btn" id="boardCropBtn" type="button">✂️ 裁剪</button>
+        <button class="board-mini-btn" id="boardDeleteImgBtn" type="button">🗑️ 删除这张图</button>
+        <span class="board-roster-hint" style="margin:0;">☝️ 拖动图片移动位置；拖右下角圆点放大/缩小；点空白处或换工具就会固定这张图（固定后不能再单独调整）。</span>
+      </div>
+      <div class="board-actions-row" id="boardCropActions" hidden>
+        <button class="board-mini-btn" id="boardCropConfirmBtn" type="button">✅ 确定裁剪</button>
+        <button class="board-mini-btn" id="boardCropCancelBtn" type="button">✖️ 取消裁剪</button>
+        <span class="board-roster-hint" style="margin:0;">☝️ 拖动橙色框选出要保留的部分，拖右下角圆点调整框的大小。</span>
       </div>
     </div>
     <div class="board-canvas-wrap">
@@ -1310,6 +1324,19 @@ var boardCurrentStroke = null;
 var TEACHER_OWNER = "teacher";
 var BOARD_ERASE_RADIUS = 30; // 橡皮擦命中判定半径（配合 1280x800 画板分辨率）
 
+/* 图片工具：插入的图片在还选中的时候可以自由移动/缩放/裁剪；
+   一旦点别处、换工具或关闭白板，就会跟画面其他内容一起「压平」，
+   之后不能再单独调整（跟橡皮擦只能擦自己笔画是同一套「压平即定型」的逻辑）。 */
+var boardSelecting = false;
+var boardImages = []; // 目前还没压平、可以调整的图片对象（正常只会有 0 或 1 个）
+var boardImgSeq = 0;
+var selectedImageId = null;
+var boardDragMode = null; // null | "move" | "resize" | "crop-move" | "crop-resize"
+var boardDragOrig = null;
+var boardCropMode = false;
+var boardCropRect = null;
+var IMG_HANDLE = 24;
+
 function initBoardButton(){
   $("boardBtn").hidden = false;
 }
@@ -1348,6 +1375,14 @@ function redrawBoard(){
       boardCtx.drawImage(boardBgImage, offX, offY, w, h);
     }
   }
+  boardImages.forEach(function(o){
+    if (boardCropMode && o.id === selectedImageId){
+      // 裁剪模式：先显示整张原图，方便挑选要保留的区域
+      boardCtx.drawImage(o.img, 0,0,o.img.width,o.img.height, o.x,o.y,o.w,o.h);
+    } else {
+      boardCtx.drawImage(o.img, o.cropX,o.cropY,o.cropW,o.cropH, o.x,o.y,o.w,o.h);
+    }
+  });
   boardStrokes.forEach(function(s){
     if (!s.pts || !s.pts.length) return;
     boardCtx.save();
@@ -1366,6 +1401,91 @@ function redrawBoard(){
     }
     boardCtx.restore();
   });
+
+  if (boardCropMode && boardCropRect){
+    var cropSel = getSelectedImage();
+    if (cropSel){
+      boardCtx.save();
+      boardCtx.fillStyle = "rgba(20,20,25,.55)";
+      boardCtx.fillRect(cropSel.x, cropSel.y, cropSel.w, cropSel.h);
+      boardCtx.save();
+      boardCtx.beginPath(); boardCtx.rect(boardCropRect.x, boardCropRect.y, boardCropRect.w, boardCropRect.h); boardCtx.clip();
+      boardCtx.drawImage(cropSel.img, 0,0,cropSel.img.width,cropSel.img.height, cropSel.x,cropSel.y,cropSel.w,cropSel.h);
+      boardCtx.restore();
+      boardCtx.strokeStyle = "#FF6B4A"; boardCtx.lineWidth = 3;
+      boardCtx.strokeRect(boardCropRect.x, boardCropRect.y, boardCropRect.w, boardCropRect.h);
+      boardCtx.fillStyle = "#FF6B4A";
+      boardCtx.beginPath(); boardCtx.arc(boardCropRect.x+boardCropRect.w, boardCropRect.y+boardCropRect.h, 12, 0, Math.PI*2); boardCtx.fill();
+      boardCtx.restore();
+    }
+  } else {
+    var sel = getSelectedImage();
+    if (sel){
+      boardCtx.save();
+      boardCtx.strokeStyle = "#2EC4B6"; boardCtx.lineWidth = 3; boardCtx.setLineDash([10,6]);
+      boardCtx.strokeRect(sel.x, sel.y, sel.w, sel.h);
+      boardCtx.setLineDash([]);
+      boardCtx.fillStyle = "#2EC4B6";
+      boardCtx.beginPath(); boardCtx.arc(sel.x+sel.w, sel.y+sel.h, 12, 0, Math.PI*2); boardCtx.fill();
+      boardCtx.restore();
+    }
+  }
+}
+
+function imageAt(pos){
+  for (var i=boardImages.length-1;i>=0;i--){
+    var o = boardImages[i];
+    if (pos.x>=o.x && pos.x<=o.x+o.w && pos.y>=o.y && pos.y<=o.y+o.h) return o;
+  }
+  return null;
+}
+function getSelectedImage(){
+  for (var i=0;i<boardImages.length;i++){ if (boardImages[i].id===selectedImageId) return boardImages[i]; }
+  return null;
+}
+
+/* 把当前压平的（背景+图片+笔画）状态定型，之后不能再单独调整插入过的图片。
+   跟橡皮擦只能擦自己笔画一样，这是「压平即定型」的既有设计，用来避免正在编辑
+   的图片跟画面其他内容互相打架。 */
+function commitPendingImageEdit(){
+  if (!boardImages.length) return;
+  selectedImageId = null;
+  boardCropMode = false; boardCropRect = null;
+  redrawBoard(); // 先把选取框/裁剪蒙层去掉，避免被一起压进背景图里
+  var snap = document.createElement("canvas");
+  snap.width = boardCanvas.width; snap.height = boardCanvas.height;
+  snap.getContext("2d").drawImage(boardCanvas, 0, 0);
+  boardBgImage = snap;
+  boardImages = [];
+  boardStrokes = [];
+  boardVersion += 1;
+  boardStateLoaded = true;
+  redrawBoard();
+  saveBoardSnapshot();
+}
+
+function placeNewImage(imgEl){
+  commitPendingImageEdit();
+  var natW = imgEl.width, natH = imgEl.height;
+  if (!natW || !natH) return;
+  var maxW = boardCanvas.width*0.6, maxH = boardCanvas.height*0.6;
+  var scale = Math.min(maxW/natW, maxH/natH, 1);
+  var w = natW*scale, h = natH*scale;
+  var x = (boardCanvas.width-w)/2, y = (boardCanvas.height-h)/2;
+  var newId = "img-"+(++boardImgSeq)+"-"+Date.now();
+  boardImages.push({ id:newId, img:imgEl, cropX:0,cropY:0,cropW:natW,cropH:natH, x:x,y:y,w:w,h:h });
+  selectedImageId = newId;
+  boardSelecting = true; boardErasing = false;
+  $("boardSelectBtn").classList.add("active");
+  $("boardEraser").classList.remove("active");
+  document.querySelectorAll(".board-color").forEach(function(b){ b.classList.remove("active"); });
+  updateBoardToolUI();
+  redrawBoard();
+}
+
+function updateBoardToolUI(){
+  $("boardImgSelActions").hidden = !(selectedImageId && !boardCropMode);
+  $("boardCropActions").hidden = !boardCropMode;
 }
 
 function distToBoardSeg(px,py,x1,y1,x2,y2){
@@ -1415,6 +1535,35 @@ function boardPointerDown(e){
   boardIsDrawing = true;
   var pos = getBoardPos(e);
   boardLastPos = pos;
+
+  if (boardSelecting){
+    if (boardCropMode && boardCropRect){
+      var onCropHandle = Math.hypot(pos.x-(boardCropRect.x+boardCropRect.w), pos.y-(boardCropRect.y+boardCropRect.h)) <= IMG_HANDLE;
+      if (onCropHandle) boardDragMode = "crop-resize";
+      else if (pos.x>=boardCropRect.x && pos.x<=boardCropRect.x+boardCropRect.w && pos.y>=boardCropRect.y && pos.y<=boardCropRect.y+boardCropRect.h) boardDragMode = "crop-move";
+      else boardDragMode = null;
+      return;
+    }
+    var sel = getSelectedImage();
+    if (sel && Math.hypot(pos.x-(sel.x+sel.w), pos.y-(sel.y+sel.h)) <= IMG_HANDLE){
+      boardDragMode = "resize";
+      boardDragOrig = { aspect: sel.w/sel.h };
+      return;
+    }
+    var hit = imageAt(pos);
+    if (hit){
+      selectedImageId = hit.id;
+      boardDragMode = "move";
+    } else {
+      if (selectedImageId) commitPendingImageEdit();
+      selectedImageId = null;
+      boardDragMode = null;
+    }
+    updateBoardToolUI();
+    redrawBoard();
+    return;
+  }
+
   if (boardErasing){
     eraseBoardAt(pos);
   } else {
@@ -1426,6 +1575,42 @@ function boardPointerMove(e){
   if (!boardIsDrawing) return;
   e.preventDefault();
   var pos = getBoardPos(e);
+
+  if (boardSelecting){
+    var dx = pos.x - boardLastPos.x, dy = pos.y - boardLastPos.y;
+    if (boardDragMode === "move"){
+      var selM = getSelectedImage();
+      if (selM){ selM.x += dx; selM.y += dy; redrawBoard(); }
+    } else if (boardDragMode === "resize" && boardDragOrig){
+      var selR = getSelectedImage();
+      if (selR){
+        selR.w = Math.max(30, selR.w + dx);
+        selR.h = selR.w / boardDragOrig.aspect;
+        redrawBoard();
+      }
+    } else if (boardDragMode === "crop-move" && boardCropRect){
+      var selCM = getSelectedImage();
+      boardCropRect.x += dx; boardCropRect.y += dy;
+      if (selCM){
+        boardCropRect.x = Math.max(selCM.x, Math.min(boardCropRect.x, selCM.x+selCM.w-boardCropRect.w));
+        boardCropRect.y = Math.max(selCM.y, Math.min(boardCropRect.y, selCM.y+selCM.h-boardCropRect.h));
+      }
+      redrawBoard();
+    } else if (boardDragMode === "crop-resize" && boardCropRect){
+      var selCR = getSelectedImage();
+      var newW = Math.max(20, boardCropRect.w + dx);
+      var newH = Math.max(20, boardCropRect.h + dy);
+      if (selCR){
+        newW = Math.min(newW, selCR.x+selCR.w-boardCropRect.x);
+        newH = Math.min(newH, selCR.y+selCR.h-boardCropRect.y);
+      }
+      boardCropRect.w = newW; boardCropRect.h = newH;
+      redrawBoard();
+    }
+    boardLastPos = pos;
+    return;
+  }
+
   if (boardErasing){
     eraseBoardAt(pos);
   } else if (boardCurrentStroke){
@@ -1439,6 +1624,11 @@ function boardPointerUp(){
   if (!boardIsDrawing) return;
   boardIsDrawing = false;
   boardLastPos = null;
+  if (boardSelecting){
+    boardDragMode = null;
+    boardDragOrig = null;
+    return;
+  }
   boardCurrentStroke = null;
   scheduleBoardSnapshot();
 }
@@ -1474,7 +1664,11 @@ function applyBoardRow(row){
   if (!boardStateLoaded || v !== boardVersion){
     boardVersion = v;
     boardStrokes = [];
+    boardImages = [];
+    selectedImageId = null;
+    boardCropMode = false; boardCropRect = null;
     boardStateLoaded = true;
+    updateBoardToolUI();
     loadBoardImage(row.snapshot);
   }
 }
@@ -1600,36 +1794,131 @@ function setBoardBackgroundFromStage(){
       return node.id === "boardOverlay" || node.id === "pollOverlay";
     }
   }).then(function(shot){
-    boardStrokes = [];
-    boardBgImage = shot;
-    boardVersion += 1;
-    boardStateLoaded = true;
-    redrawBoard();
-    saveBoardSnapshot();
+    placeNewImage(shot);
   }).catch(function(){ alert("截图失败，请再试一次。"); });
+}
+
+function handleBoardImageFile(file){
+  if (!file || !/^image\//.test(file.type)) return;
+  var reader = new FileReader();
+  reader.onload = function(){
+    var img = new Image();
+    img.onload = function(){ placeNewImage(img); };
+    img.onerror = function(){ alert("这张图片打不开，请换一张试试。"); };
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
 }
 
 function clearBoardCanvas(){
   if (!boardCanvas) return;
   boardStrokes = [];
+  boardImages = [];
+  selectedImageId = null;
+  boardCropMode = false; boardCropRect = null;
   boardBgImage = null;
   boardVersion += 1;
   boardStateLoaded = true;
+  updateBoardToolUI();
   redrawBoard();
   saveBoardSnapshot();
 }
 
+function exitSelectTool(){
+  if (!boardSelecting) return;
+  boardSelecting = false;
+  $("boardSelectBtn").classList.remove("active");
+  if (selectedImageId) commitPendingImageEdit();
+  updateBoardToolUI();
+}
+
 $("boardBtn").addEventListener("click", openBoard);
-$("boardCloseBtn").addEventListener("click", function(){ $("boardOverlay").classList.remove("show"); });
+$("boardCloseBtn").addEventListener("click", function(){
+  if (selectedImageId) commitPendingImageEdit();
+  $("boardOverlay").classList.remove("show");
+});
 $("boardClearBtn").addEventListener("click", clearBoardCanvas);
 $("boardBgBtn").addEventListener("click", setBoardBackgroundFromStage);
+$("boardInsertImgBtn").addEventListener("click", function(){ $("boardImgFileInput").click(); });
+$("boardImgFileInput").addEventListener("change", function(e){
+  if (e.target.files && e.target.files[0]) handleBoardImageFile(e.target.files[0]);
+  e.target.value = "";
+});
+document.addEventListener("paste", function(e){
+  if (!$("boardOverlay").classList.contains("show")) return;
+  var items = (e.clipboardData && e.clipboardData.items) || [];
+  for (var i=0;i<items.length;i++){
+    if (items[i].type && items[i].type.indexOf("image/")===0){
+      var file = items[i].getAsFile();
+      if (file){ handleBoardImageFile(file); e.preventDefault(); }
+      break;
+    }
+  }
+});
+$("boardSelectBtn").addEventListener("click", function(){
+  boardSelecting = true;
+  boardErasing = false;
+  this.classList.add("active");
+  $("boardEraser").classList.remove("active");
+  document.querySelectorAll(".board-color").forEach(function(b){ b.classList.remove("active"); });
+  updateBoardToolUI();
+});
+$("boardCropBtn").addEventListener("click", function(){
+  var sel = getSelectedImage();
+  if (!sel) return;
+  boardCropMode = true;
+  var natW = sel.img.width, natH = sel.img.height;
+  var dispScaleX = sel.w/natW, dispScaleY = sel.h/natH;
+  boardCropRect = {
+    x: sel.x + sel.cropX*dispScaleX,
+    y: sel.y + sel.cropY*dispScaleY,
+    w: sel.cropW*dispScaleX,
+    h: sel.cropH*dispScaleY
+  };
+  updateBoardToolUI();
+  redrawBoard();
+});
+$("boardCropCancelBtn").addEventListener("click", function(){
+  boardCropMode = false; boardCropRect = null;
+  updateBoardToolUI(); redrawBoard();
+});
+$("boardCropConfirmBtn").addEventListener("click", function(){
+  var sel = getSelectedImage();
+  if (sel && boardCropRect){
+    var natW = sel.img.width, natH = sel.img.height;
+    var dispScaleX = sel.w/natW, dispScaleY = sel.h/natH;
+    var nx = (boardCropRect.x - sel.x)/dispScaleX;
+    var ny = (boardCropRect.y - sel.y)/dispScaleY;
+    var nw = boardCropRect.w/dispScaleX;
+    var nh = boardCropRect.h/dispScaleY;
+    nx = Math.max(0, Math.min(nx, natW-4));
+    ny = Math.max(0, Math.min(ny, natH-4));
+    nw = Math.max(4, Math.min(nw, natW-nx));
+    nh = Math.max(4, Math.min(nh, natH-ny));
+    sel.cropX = nx; sel.cropY = ny; sel.cropW = nw; sel.cropH = nh;
+    sel.h = sel.w * (nh/nw);
+  }
+  boardCropMode = false; boardCropRect = null;
+  updateBoardToolUI(); redrawBoard();
+});
+$("boardDeleteImgBtn").addEventListener("click", function(){
+  for (var i=0;i<boardImages.length;i++){
+    if (boardImages[i].id === selectedImageId){ boardImages.splice(i,1); break; }
+  }
+  selectedImageId = null;
+  boardCropMode = false; boardCropRect = null;
+  updateBoardToolUI();
+  redrawBoard();
+});
 $("boardEraser").addEventListener("click", function(){
+  exitSelectTool();
   boardErasing = !boardErasing;
   this.classList.toggle("active", boardErasing);
   document.querySelectorAll(".board-color").forEach(function(b){ b.classList.remove("active"); });
 });
 document.querySelectorAll(".board-color").forEach(function(b){
   b.addEventListener("click", function(){
+    exitSelectTool();
     boardErasing = false;
     $("boardEraser").classList.remove("active");
     document.querySelectorAll(".board-color").forEach(function(x){ x.classList.remove("active"); });
@@ -1656,5 +1945,4 @@ render();
 })();
 </script>
 
-</body>
-</html>
+</body></html>
