@@ -1200,6 +1200,14 @@ function initPoll(){
     pollClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     $("pollBtn").hidden = false;
     initBoardButton();
+    /* pollVersion 只是老师这边的本地计数器，老师的页面一重新整理就会归零。
+       如果不先跟服务器上次用到的版本号对齐，重新整理后发的下一题很可能又用回
+       学生设备已经答过的旧版本号，学生那边就会一直显示「你已经提交过了」。 */
+    pollClient.from("live_poll").select("version").eq("id","current").maybeSingle().then(function(res){
+      if (res.data && typeof res.data.version === "number" && res.data.version > pollVersion){
+        pollVersion = res.data.version;
+      }
+    });
   } catch(e){ /* Supabase unreachable — keep the button hidden, rest of the manual still works */ }
 }
 
