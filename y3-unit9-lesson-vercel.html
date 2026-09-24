@@ -338,7 +338,7 @@
       <div class="board-actions-row" id="boardImgSelActions" hidden>
         <button class="board-mini-btn" id="boardCropBtn" type="button">✂️ 裁剪</button>
         <button class="board-mini-btn" id="boardDeleteImgBtn" type="button">🗑️ 删除这张图</button>
-        <span class="board-roster-hint" style="margin:0;">☝️ 拖动图片移动位置；拖右下角圆点放大/缩小；点空白处或换工具就会固定这张图（固定后不能再单独调整）。</span>
+        <span class="board-roster-hint" style="margin:0;">☝️ 拖动图片移动位置；拖右下角圆点放大/缩小；随时都可以再点选这张图继续调整。</span>
       </div>
       <div class="board-actions-row" id="boardCropActions" hidden>
         <button class="board-mini-btn" id="boardCropConfirmBtn" type="button">✅ 确定裁剪</button>
@@ -365,6 +365,14 @@
         <div class="board-roster-empty" id="boardRosterEmpty">还没有学生打开白板网址……</div>
       </div>
       <div class="board-roster-hint">☝️ 勾选学生名字，授权给他一起画；没勾选的学生只能看，不能画。</div>
+      <div class="board-roster-head" style="margin-top:14px;">
+        <div class="board-roster-title">🧑‍🎓🧑‍🎓 各自练习模式</div>
+      </div>
+      <div class="board-roster-actions" style="margin-bottom:6px;">
+        <button class="board-mini-btn" id="boardSubToggleBtn" type="button">▶️ 开始各自练习</button>
+        <button class="board-mini-btn" id="boardSubNewRoundBtn" type="button" hidden>🔄 清空重新开始</button>
+      </div>
+      <div class="board-roster-hint">☝️ 开启后，被授权的学生会各自拿到一块只有自己看得到的空白画板，写完按「提交」，画面会自动出现在这块画板上（标着名字），可以拖动、放大缩小来一个个检查步骤——这样一班多人也都有自己的画板可以写，不用轮流等。</div>
     </div>
     <div class="board-footer">
       <button class="poll-close" id="boardCloseBtn" type="button">关闭</button>
@@ -1331,11 +1339,12 @@ var boardCurrentStroke = null;
 var TEACHER_OWNER = "teacher";
 var BOARD_ERASE_RADIUS = 30; // 橡皮擦命中判定半径（配合 1280x800 画板分辨率）
 
-/* 图片工具：插入的图片在还选中的时候可以自由移动/缩放/裁剪；
-   一旦点别处、换工具或关闭白板，就会跟画面其他内容一起「压平」，
-   之后不能再单独调整（跟橡皮擦只能擦自己笔画是同一套「压平即定型」的逻辑）。 */
+/* 图片工具：插入的图片、统计图截图、学生提交的作业都放在 boardImages 里，
+   随时都能用「选取/移动」工具重新点选、移动、缩放、裁剪，不会因为点了别处
+   或换了工具就固定住。这些改动是靠「版本号 + 完整截图」同步给学生/其他分页
+   看的（syncBoardVersion），不是跟笔画一样逐段广播。 */
 var boardSelecting = false;
-var boardImages = []; // 目前还没压平、可以调整的图片对象（正常只会有 0 或 1 个）
+var boardImages = []; // {id, img, cropX/Y/W/H, x,y,w,h, subLabel?, subClientId?}
 var boardImgSeq = 0;
 var selectedImageId = null;
 var boardDragMode = null; // null | "move" | "resize" | "crop-move" | "crop-resize"
@@ -1345,12 +1354,19 @@ var boardCropRect = null;
 var IMG_HANDLE = 24;
 
 /* 直线／矩形／圆形工具：拖出形状后会自动变成「选取」状态，方便立刻再调整位置；
-   跟笔画一样，形状会一直留在画板上（可以随时用「选取/移动」工具拖动、用橡皮擦擦掉），
-   不会像图片那样在换工具后被压平定型。 */
+   跟笔画一样，形状会一直留在画板上（可以随时用「选取/移动」工具拖动、用橡皮擦擦掉）。 */
 var boardShapeTool = null; // null | "line" | "rect" | "ellipse"
 var boardCurrentShape = null;
 var boardShapeSeq = 0;
 var selectedStrokeId = null;
+
+/* 「各自练习」模式：老师开启后，被授权的学生会各自拿到一块只有自己看得到的
+   空白画板，写完提交，画面会以 board_submissions 表实时同步过来，老师这边
+   自动把它放上画板（当成一张可以移动/缩放的图片），方便一次检查全班做法。 */
+var boardSubActive = false;
+var boardSubRound = 0;
+var boardSubChannel = null;
+var boardSubPlacedCount = 0;
 
 function initBoardButton(){
   $("boardBtn").hidden = false;
@@ -1396,6 +1412,19 @@ function redrawBoard(){
       boardCtx.drawImage(o.img, 0,0,o.img.width,o.img.height, o.x,o.y,o.w,o.h);
     } else {
       boardCtx.drawImage(o.img, o.cropX,o.cropY,o.cropW,o.cropH, o.x,o.y,o.w,o.h);
+    }
+    if (o.subLabel){
+      boardCtx.save();
+      boardCtx.font = "bold 16px sans-serif";
+      var labelText = o.subLabel;
+      var labelW = boardCtx.measureText(labelText).width;
+      boardCtx.fillStyle = "rgba(255,107,74,.92)";
+      boardCtx.fillRect(o.x, Math.max(0,o.y-24), labelW+14, 24);
+      boardCtx.fillStyle = "#fff";
+      boardCtx.fillText(labelText, o.x+7, Math.max(16,o.y-7));
+      boardCtx.strokeStyle = "#FF6B4A"; boardCtx.lineWidth = 2;
+      boardCtx.strokeRect(o.x, o.y, o.w, o.h);
+      boardCtx.restore();
     }
   });
   boardStrokes.forEach(function(s){
@@ -1509,28 +1538,31 @@ function strokeAt(pos){
   return null;
 }
 
-/* 把当前压平的（背景+图片+笔画）状态定型，之后不能再单独调整插入过的图片。
-   跟橡皮擦只能擦自己笔画一样，这是「压平即定型」的既有设计，用来避免正在编辑
-   的图片跟画面其他内容互相打架。 */
-function commitPendingImageEdit(){
-  if (!boardImages.length) return;
-  selectedImageId = null;
+/* 图片（插入的图片、统计图截图、学生提交的作业）会一直保持能单独选取/移动/
+   缩放/裁剪的状态，不会一点别处就被压平定型——这样才能让好几张图（例如全班
+   的提交）同时留在画板上，方便老师自由排列、一个个检查。
+   取消选取只是把选取框收起来，不会动到图片本身。 */
+function deselectAll(){
+  selectedImageId = null; selectedStrokeId = null;
   boardCropMode = false; boardCropRect = null;
-  redrawBoard(); // 先把选取框/裁剪蒙层去掉，避免被一起压进背景图里
-  var snap = document.createElement("canvas");
-  snap.width = boardCanvas.width; snap.height = boardCanvas.height;
-  snap.getContext("2d").drawImage(boardCanvas, 0, 0);
-  boardBgImage = snap;
-  boardImages = [];
-  boardStrokes = [];
+  updateBoardToolUI();
+  redrawBoard();
+}
+/* 图片是用「版本号 + 完整截图」同步给学生/其他分页的（跟笔画不一样，笔画是
+   一段段广播出去的）；每次新增/移动/缩放/裁剪/删除图片后调用这个，让已经在
+   看画板的人也能更新画面。不会清掉老师这边正在编辑的图片对象，老师可以
+   继续调整。 */
+function syncBoardVersion(){
   boardVersion += 1;
   boardStateLoaded = true;
-  redrawBoard();
-  saveBoardSnapshot();
+  if (!pollClient || !boardCanvas) return;
+  var dataUrl = boardCanvas.toDataURL("image/png");
+  pollClient.from("live_board").upsert({ id:"current", version:boardVersion, snapshot:dataUrl, updated_at:new Date().toISOString() }).then(function(res){
+    if (res.error) { /* 保存失败不影响老师这边继续编辑，学生端下次连线时会补上最新状态 */ }
+  });
 }
 
 function placeNewImage(imgEl){
-  commitPendingImageEdit();
   var natW = imgEl.width, natH = imgEl.height;
   if (!natW || !natH) return;
   var maxW = boardCanvas.width*0.6, maxH = boardCanvas.height*0.6;
@@ -1549,6 +1581,7 @@ function placeNewImage(imgEl){
   document.querySelectorAll(".board-color").forEach(function(b){ b.classList.remove("active"); });
   updateBoardToolUI();
   redrawBoard();
+  syncBoardVersion();
 }
 
 function updateBoardToolUI(){
@@ -1659,7 +1692,6 @@ function boardPointerDown(e){
     }
     var strokeHitObj = strokeAt(pos);
     if (strokeHitObj){
-      if (selectedImageId) commitPendingImageEdit();
       selectedImageId = null;
       selectedStrokeId = strokeHitObj.id;
       boardDragMode = "moveStroke";
@@ -1667,12 +1699,8 @@ function boardPointerDown(e){
       redrawBoard();
       return;
     }
-    if (selectedImageId) commitPendingImageEdit();
-    selectedImageId = null;
-    selectedStrokeId = null;
+    deselectAll();
     boardDragMode = null;
-    updateBoardToolUI();
-    redrawBoard();
     return;
   }
 
@@ -1771,6 +1799,7 @@ function boardPointerUp(){
   }
   if (boardSelecting){
     if (boardDragMode === "moveStroke") scheduleBoardSnapshot();
+    else if (boardDragMode === "move" || boardDragMode === "resize") syncBoardVersion();
     boardDragMode = null;
     boardDragOrig = null;
     return;
@@ -1806,6 +1835,12 @@ function loadBoardImage(dataUrl, cb){
 function applyBoardRow(row){
   boardAllowedIds = Array.isArray(row.allowed_client_ids) ? row.allowed_client_ids : [];
   renderBoardRoster();
+  var wasSubActive = boardSubActive;
+  boardSubRound = row.sub_round || 0;
+  boardSubActive = !!row.sub_active;
+  $("boardSubToggleBtn").textContent = boardSubActive ? "⏹️ 结束各自练习" : "▶️ 开始各自练习";
+  $("boardSubNewRoundBtn").hidden = !boardSubActive;
+  if (boardSubActive && !wasSubActive) subscribeSubmissions();
   var v = row.version || 0;
   if (!boardStateLoaded || v !== boardVersion){
     boardVersion = v;
@@ -1938,6 +1973,96 @@ function openBoard(){
   });
 }
 
+function persistSubState(active, round){
+  if (!pollClient) return;
+  pollClient.from("live_board").upsert({ id:"current", sub_active:active, sub_round:round, updated_at:new Date().toISOString() }).then(function(res){
+    if (res.error){
+      alert("❌ 没有保存成功：" + res.error.message + "\n\n很可能是 Supabase 的 live_board 表还没加 sub_active / sub_round 字段，也可能是 board_submissions 表还没建，请到 Supabase 的 SQL Editor 跑一次学生画板页面开头注释里的建表 SQL。");
+    }
+  });
+}
+
+/* 把一个学生提交的图片放上画板：同一个学生重新提交时，会更新已经放着的那张图的
+   内容，但保留老师之前帮它调整好的位置和大小，不会因为重交一次就跳回原位。
+   第一次提交则自动排成小格子，方便老师之后自己拖开检查。 */
+function placeSubmissionImage(imgEl, name, clientId){
+  var natW = imgEl.width, natH = imgEl.height;
+  if (!natW || !natH) return;
+  for (var i=0;i<boardImages.length;i++){
+    if (boardImages[i].subClientId === clientId){
+      boardImages[i].img = imgEl;
+      boardImages[i].cropX = 0; boardImages[i].cropY = 0;
+      boardImages[i].cropW = natW; boardImages[i].cropH = natH;
+      boardImages[i].subLabel = name;
+      redrawBoard();
+      syncBoardVersion();
+      return;
+    }
+  }
+  var cols = 4;
+  var cellW = boardCanvas.width/cols, cellH = 190;
+  var idx = boardSubPlacedCount++;
+  var col = idx % cols, row = Math.floor(idx/cols);
+  var maxW = cellW-16, maxH = cellH-30;
+  var scale = Math.min(maxW/natW, maxH/natH, 1);
+  var w = natW*scale, h = natH*scale;
+  var x = col*cellW + (cellW-w)/2;
+  var y = row*cellH + (cellH-h)/2 + 26;
+  var newId = "sub-"+clientId+"-"+Date.now();
+  boardImages.push({ id:newId, img:imgEl, cropX:0,cropY:0,cropW:natW,cropH:natH, x:x,y:y,w:w,h:h, subLabel:name, subClientId:clientId });
+  redrawBoard();
+  syncBoardVersion();
+}
+
+function loadSubmissionRow(row){
+  var img = new Image();
+  img.onload = function(){ placeSubmissionImage(img, row.name, row.client_id); };
+  img.src = row.snapshot;
+}
+
+function subscribeSubmissions(){
+  if (!pollClient) return;
+  if (boardSubChannel) pollClient.removeChannel(boardSubChannel);
+  boardSubChannel = pollClient.channel("board-submissions-watch")
+    .on("postgres_changes", { event:"*", schema:"public", table:"board_submissions" }, function(payload){
+      var row = payload.new;
+      if (!row || row.round !== boardSubRound) return;
+      loadSubmissionRow(row);
+    })
+    .subscribe();
+  pollClient.from("board_submissions").select("*").eq("round", boardSubRound).then(function(res){
+    (res.data || []).forEach(loadSubmissionRow);
+  });
+}
+
+$("boardSubToggleBtn").addEventListener("click", function(){
+  if (!boardSubActive){
+    boardSubRound += 1;
+    boardSubActive = true;
+    boardSubPlacedCount = 0;
+    boardImages = boardImages.filter(function(o){ return !o.subClientId; });
+    $("boardSubToggleBtn").textContent = "⏹️ 结束各自练习";
+    $("boardSubNewRoundBtn").hidden = false;
+    persistSubState(true, boardSubRound);
+    subscribeSubmissions();
+    redrawBoard();
+  } else {
+    boardSubActive = false;
+    $("boardSubToggleBtn").textContent = "▶️ 开始各自练习";
+    $("boardSubNewRoundBtn").hidden = true;
+    persistSubState(false, boardSubRound);
+  }
+});
+$("boardSubNewRoundBtn").addEventListener("click", function(){
+  boardSubRound += 1;
+  boardSubPlacedCount = 0;
+  boardImages = boardImages.filter(function(o){ return !o.subClientId; });
+  if (selectedImageId && !getSelectedImage()) selectedImageId = null;
+  updateBoardToolUI();
+  redrawBoard();
+  persistSubState(true, boardSubRound);
+});
+
 function setBoardBackgroundFromStage(){
   if (typeof html2canvas === "undefined"){ alert("背景截图工具还没加载好，请稍等几秒再试一次。"); return; }
   var stageEl = document.getElementById("stage");
@@ -1970,6 +2095,7 @@ function clearBoardCanvas(){
   if (!boardCanvas) return;
   boardStrokes = [];
   boardImages = [];
+  boardSubPlacedCount = 0;
   selectedImageId = null;
   selectedStrokeId = null;
   boardShapeTool = null; boardCurrentShape = null;
@@ -1987,16 +2113,12 @@ function exitSelectTool(){
   if (!boardSelecting) return;
   boardSelecting = false;
   $("boardSelectBtn").classList.remove("active");
-  if (selectedImageId) commitPendingImageEdit();
-  selectedStrokeId = null;
-  updateBoardToolUI();
-  redrawBoard();
+  deselectAll();
 }
 
 $("boardBtn").addEventListener("click", openBoard);
 $("boardCloseBtn").addEventListener("click", function(){
-  if (selectedImageId) commitPendingImageEdit();
-  selectedStrokeId = null;
+  deselectAll();
   $("boardOverlay").classList.remove("show");
 });
 $("boardClearBtn").addEventListener("click", clearBoardCanvas);
@@ -2085,6 +2207,7 @@ $("boardCropConfirmBtn").addEventListener("click", function(){
     nh = Math.max(4, Math.min(nh, natH-ny));
     sel.cropX = nx; sel.cropY = ny; sel.cropW = nw; sel.cropH = nh;
     sel.h = sel.w * (nh/nw);
+    syncBoardVersion();
   }
   boardCropMode = false; boardCropRect = null;
   updateBoardToolUI(); redrawBoard();
@@ -2097,6 +2220,7 @@ $("boardDeleteImgBtn").addEventListener("click", function(){
   boardCropMode = false; boardCropRect = null;
   updateBoardToolUI();
   redrawBoard();
+  syncBoardVersion();
 });
 $("boardEraser").addEventListener("click", function(){
   exitSelectTool();
