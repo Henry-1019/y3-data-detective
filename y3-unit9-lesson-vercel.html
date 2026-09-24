@@ -1257,10 +1257,63 @@ function initPoll(){
   } catch(e){ /* Supabase unreachable — keep the button hidden, rest of the manual still works */ }
 }
 
+/* 很多题目要靠旁边的统计图（长条图/饼分图/记数统计表）才能作答，
+   所以除了题目文字，也把这一页的图表「拆成数据」一起发给学生，
+   学生那边用同一份数据重新画出一模一样的图表（不是传图片，
+   而是传数字/文字，比较安全，也比截图清楚）。 */
+function scrapeChart(){
+  var barEl = document.querySelector("#stage .bar-chart");
+  if (barEl){
+    var cols = [];
+    barEl.querySelectorAll(".bar-col").forEach(function(col){
+      var labels = col.querySelectorAll(".bar-label");
+      var rect = col.querySelector(".bar-rect");
+      var missing = rect ? rect.classList.contains("missing") : false;
+      cols.push({
+        value: labels[0] ? labels[0].textContent : "",
+        label: labels[1] ? labels[1].textContent : "",
+        height: rect ? rect.style.height : "",
+        missing: missing,
+        color: (rect && !missing) ? rect.style.background : ""
+      });
+    });
+    return { type:"bar", cols: cols };
+  }
+  var pieEl = document.querySelector("#stage .pie-wrap");
+  if (pieEl){
+    var pieDiv = pieEl.querySelector(".pie");
+    var legend = [];
+    pieEl.querySelectorAll(".pie-legend .row").forEach(function(row){
+      var sw = row.querySelector(".pie-swatch");
+      var span = row.querySelector("span");
+      legend.push({ color: sw ? sw.style.background : "", text: span ? span.textContent : "" });
+    });
+    return { type:"pie", background: pieDiv ? pieDiv.style.background : "", legend: legend };
+  }
+  var freqEl = document.querySelector("#stage .freq-table");
+  if (freqEl){
+    var rows = [];
+    var freqRows = freqEl.querySelectorAll(".freq-row");
+    freqRows.forEach(function(row, idx){
+      if (idx === 0) return; // 第一行是表头（食物/记录/人数），学生那边会自己画表头
+      var label = row.querySelector(".freq-label");
+      var checksEl = row.querySelector(".freq-checks");
+      var countEl = row.querySelector(".freq-count");
+      rows.push({
+        label: label ? label.textContent : "",
+        checkCount: checksEl ? checksEl.children.length : 0,
+        count: countEl ? countEl.textContent : ""
+      });
+    });
+    return { type:"freq", rows: rows };
+  }
+  return null;
+}
+
 /* 举手统计现在支持三种题型，学生画面和作答方式都跟老师这边一模一样：
    选择题/多选题维持原样；数字键盘题、拖拽题不再靠「生成几个选项给学生猜」，
-   而是把这一题的原始内容（数字键盘的正确答案 / 拖拽题的卡片和格子）整包
-   透过 live_poll.mode + live_poll.payload 发给学生，学生那边用一模一样的
+   而是把这一题的原始内容（数字键盘的正确答案 / 拖拽题的卡片和格子 / 图表）
+   整包透过 live_poll.mode + live_poll.payload 发给学生，学生那边用一模一样的
    组件重新画出同一题，作答后送回来的字符串也用同一种拼法，
    这样对答案时才能对得上。 */
 function scrapeCurrentQuestion(){
@@ -1272,25 +1325,27 @@ function scrapeCurrentQuestion(){
     if (instrEls.length) qText = instrEls[0].textContent;
   }
 
+  var chart = scrapeChart();
+
   /* 选择题 / 多选题：直接读现成的按钮 */
   var optEls = document.querySelectorAll("#stage .choices .choice");
   if (optEls.length){
     var opts = Array.prototype.map.call(optEls, function(b){ return b.textContent; });
     var correctEl = document.querySelector("#stage .choices .choice[data-correct='1']");
     var correctAnswer = correctEl ? correctEl.textContent : null;
-    return { mode:"choice", question: qText, options: opts, correctAnswer: correctAnswer, payload: null };
+    return { mode:"choice", question: qText, options: opts, correctAnswer: correctAnswer, payload: chart ? { chart: chart } : null };
   }
 
-  /* 数字键盘题：学生那边也会看到同一个数字键盘 */
+  /* 数字键盘题：学生那边也会看到同一个数字键盘（加上图表，方便对照作答） */
   var numEl = document.querySelector("#stage .numpad-wrap[data-correct-value]");
   if (numEl){
     var correctNum = Number(numEl.dataset.correctValue);
     if (!isNaN(correctNum)){
-      return { mode:"numpad", question: qText, options: [], correctAnswer: String(correctNum), payload: null };
+      return { mode:"numpad", question: qText, options: [], correctAnswer: String(correctNum), payload: chart ? { chart: chart } : null };
     }
   }
 
-  /* 拖拽题：把卡片（tokens）和格子（blanks）整包发给学生，重画同一题 */
+  /* 拖拽题：把卡片（tokens）、格子（blanks）和图表整包发给学生，重画同一题 */
   var dragEl = document.querySelector("#stage .dragblank-wrap[data-drag-blanks-full]");
   if (dragEl){
     try {
@@ -1300,7 +1355,7 @@ function scrapeCurrentQuestion(){
         var tokLabelById = {};
         tokensFull.forEach(function(t){ tokLabelById[t.id] = t.label; });
         var correctStr = blanksFull.map(function(b){ return tokLabelById[b.correct] || "?"; }).join("|");
-        return { mode:"drag", question: qText, options: [], correctAnswer: correctStr, payload: { tokens: tokensFull, blanks: blanksFull } };
+        return { mode:"drag", question: qText, options: [], correctAnswer: correctStr, payload: { tokens: tokensFull, blanks: blanksFull, chart: chart } };
       }
     } catch(e){}
   }
@@ -1448,6 +1503,53 @@ function sendPoll(scraped){
       .subscribe();
   }).catch(function(){ totalEl.textContent = "发送失败，请检查网络。"; });
 }
+
+/* 让弹窗（举手统计 / 共享白板）可以像浮动窗口一样拖动位置：
+   拖标题栏移动，右下角的缩放靠 CSS 的 resize:both 就有了，不用额外写代码。
+   窗口位置/大小会记住，下次再打开还在原本的地方，不用每次都重新调整。 */
+function makeFloatingPanel(panel, handle){
+  var dragging = false, startX=0, startY=0, origLeft=0, origTop=0;
+  function toFloating(){
+    if (panel.dataset.floating === "1") return;
+    var rect = panel.getBoundingClientRect();
+    panel.style.position = "fixed";
+    panel.style.left = rect.left + "px";
+    panel.style.top = rect.top + "px";
+    panel.style.margin = "0";
+    panel.dataset.floating = "1";
+  }
+  function clientPt(e){ return e.touches && e.touches.length ? e.touches[0] : e; }
+  function onDown(e){
+    if (e.target !== handle) return; // 只有标题栏本身能拖，避免点到里面的按钮也触发拖动
+    toFloating();
+    dragging = true;
+    var pt = clientPt(e);
+    startX = pt.clientX; startY = pt.clientY;
+    var rect = panel.getBoundingClientRect();
+    origLeft = rect.left; origTop = rect.top;
+    if (e.cancelable) e.preventDefault();
+  }
+  function onMove(e){
+    if (!dragging) return;
+    var pt = clientPt(e);
+    var dx = pt.clientX - startX, dy = pt.clientY - startY;
+    var newLeft = origLeft + dx, newTop = origTop + dy;
+    newLeft = Math.max(-panel.offsetWidth + 80, Math.min(window.innerWidth - 60, newLeft));
+    newTop = Math.max(0, Math.min(window.innerHeight - 40, newTop));
+    panel.style.left = newLeft + "px";
+    panel.style.top = newTop + "px";
+    if (e.cancelable) e.preventDefault();
+  }
+  function onUp(){ dragging = false; }
+  handle.addEventListener("mousedown", onDown);
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+  handle.addEventListener("touchstart", onDown, {passive:false});
+  document.addEventListener("touchmove", onMove, {passive:false});
+  document.addEventListener("touchend", onUp);
+}
+makeFloatingPanel($("pollOverlay").querySelector(".poll-panel"), $("pollOverlay").querySelector(".poll-panel h3"));
+makeFloatingPanel($("boardOverlay").querySelector(".poll-panel"), $("boardOverlay").querySelector(".poll-panel h3"));
 
 $("pollBtn").addEventListener("click", openPollPanel);
 $("pollCloseBtn").addEventListener("click", function(){
