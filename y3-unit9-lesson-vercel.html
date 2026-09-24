@@ -369,11 +369,15 @@
         <div class="board-roster-title">🧑‍🎓🧑‍🎓 各自练习模式</div>
       </div>
       <textarea id="boardSubQuestionInput" class="board-sub-question-input" rows="2" placeholder="给这一轮练习写一句题目，例如「请写出 25 + 48 的计算过程」……"></textarea>
+      <label class="board-roster-hint" style="display:flex; align-items:center; gap:6px; margin:0 0 8px; cursor:pointer;">
+        <input type="checkbox" id="boardSubImageToggle" checked style="width:15px; height:15px; accent-color:var(--primary); cursor:pointer;">
+        🖼️ 同时把本页画面（含图表）复制给每位学生当底图
+      </label>
       <div class="board-roster-actions" style="margin-bottom:6px;">
         <button class="board-mini-btn" id="boardSubToggleBtn" type="button">▶️ 发布题目并开始</button>
         <button class="board-mini-btn" id="boardSubNewRoundBtn" type="button" hidden>🔄 换一题重新开始</button>
       </div>
-      <div class="board-roster-hint">☝️ 开启后，被授权的学生会各自拿到一块只有自己看得到的空白画板（上面会显示你写的题目），写完按「提交」，画面会自动出现在这块画板上（标着名字），可以拖动、放大缩小来一个个检查步骤——这样一班多人也都有自己的画板可以写，不用轮流等。</div>
+      <div class="board-roster-hint">☝️ 开启后，被授权的学生会各自拿到一块只有自己看得到的画板（上面会显示你写的题目，勾选了上面的选项还会印上本页画面当底图），写完按「提交」，画面会自动出现在这块画板上（标着名字），可以拖动、放大缩小来一个个检查步骤——这样一班多人也都有自己的画板可以写，不用轮流等。</div>
       <div id="boardSubLbBlock" hidden style="margin-top:10px;">
         <div class="board-roster-title" style="font-size:12.5px;">🏆 最快答对（前 3 名）</div>
         <div class="board-roster-list" id="boardSubLeaderboard" style="margin-top:6px;"></div>
@@ -2222,14 +2226,15 @@ function openBoard(){
   });
 }
 
-function persistSubState(active, round, question, startedAt){
+function persistSubState(active, round, question, startedAt, image){
   if (!pollClient) return;
   var payload = { id:"current", sub_active:active, sub_round:round, updated_at:new Date().toISOString() };
   if (question !== undefined) payload.sub_question = question;
   if (startedAt !== undefined) payload.sub_started_at = new Date(startedAt).toISOString();
+  if (image !== undefined) payload.sub_image = image; // null 表示这一轮不附图片
   pollClient.from("live_board").upsert(payload).then(function(res){
     if (res.error){
-      alert("❌ 没有保存成功：" + res.error.message + "\n\n很可能是 Supabase 的 live_board 表还没加 sub_active / sub_round / sub_question / sub_started_at 字段，也可能是 board_submissions 表还没建，请到 Supabase 的 SQL Editor 跑一次学生画板页面开头注释里的建表 SQL。");
+      alert("❌ 没有保存成功：" + res.error.message + "\n\n很可能是 Supabase 的 live_board 表还没加 sub_active / sub_round / sub_question / sub_started_at / sub_image 字段，也可能是 board_submissions 表还没建，请到 Supabase 的 SQL Editor 跑一次学生画板页面开头注释里的建表 SQL。");
     }
   });
 }
@@ -2340,22 +2345,38 @@ function renderSubLeaderboard(){
   });
 }
 
+/* 「附上本页图片」勾选时会先花一点时间截图，所以开始/换题按钮改成
+   等截图结果出来再真的开始这一轮，中途按钮会先停用，避免连点两次。 */
+function captureSubImageIfWanted(){
+  if (!$("boardSubImageToggle").checked) return Promise.resolve(null);
+  return captureStageImage().catch(function(){
+    alert("本页画面截图失败，这一轮先不附图片，学生只会看到题目文字。");
+    return null;
+  });
+}
+
 $("boardSubToggleBtn").addEventListener("click", function(){
   if (!boardSubActive){
     var q = $("boardSubQuestionInput").value.trim();
-    boardSubRound += 1;
-    boardSubActive = true;
-    boardSubQuestion = q;
-    boardSubStartedAt = Date.now();
-    boardSubEntries = {};
-    boardSubPlacedCount = 0;
-    boardImages = boardImages.filter(function(o){ return !o.subClientId; });
-    $("boardSubToggleBtn").textContent = "⏹️ 结束各自练习";
-    $("boardSubNewRoundBtn").hidden = false;
-    renderSubList(); renderSubLeaderboard();
-    persistSubState(true, boardSubRound, q, boardSubStartedAt);
-    subscribeSubmissions();
-    redrawBoard();
+    var thisRound = boardSubRound + 1;
+    var thisStartedAt = Date.now();
+    $("boardSubToggleBtn").disabled = true;
+    captureSubImageIfWanted().then(function(imageDataUrl){
+      $("boardSubToggleBtn").disabled = false;
+      boardSubRound = thisRound;
+      boardSubActive = true;
+      boardSubQuestion = q;
+      boardSubStartedAt = thisStartedAt;
+      boardSubEntries = {};
+      boardSubPlacedCount = 0;
+      boardImages = boardImages.filter(function(o){ return !o.subClientId; });
+      $("boardSubToggleBtn").textContent = "⏹️ 结束各自练习";
+      $("boardSubNewRoundBtn").hidden = false;
+      renderSubList(); renderSubLeaderboard();
+      persistSubState(true, boardSubRound, q, boardSubStartedAt, imageDataUrl);
+      subscribeSubmissions();
+      redrawBoard();
+    });
   } else {
     boardSubActive = false;
     $("boardSubToggleBtn").textContent = "▶️ 发布题目并开始";
@@ -2365,23 +2386,29 @@ $("boardSubToggleBtn").addEventListener("click", function(){
 });
 $("boardSubNewRoundBtn").addEventListener("click", function(){
   var q = $("boardSubQuestionInput").value.trim();
-  boardSubRound += 1;
-  boardSubQuestion = q;
-  boardSubStartedAt = Date.now();
-  boardSubEntries = {};
-  boardSubPlacedCount = 0;
-  boardImages = boardImages.filter(function(o){ return !o.subClientId; });
-  if (selectedImageId && !getSelectedImage()) selectedImageId = null;
-  updateBoardToolUI();
-  renderSubList(); renderSubLeaderboard();
-  redrawBoard();
-  persistSubState(true, boardSubRound, q, boardSubStartedAt);
+  var thisRound = boardSubRound + 1;
+  var thisStartedAt = Date.now();
+  $("boardSubNewRoundBtn").disabled = true;
+  captureSubImageIfWanted().then(function(imageDataUrl){
+    $("boardSubNewRoundBtn").disabled = false;
+    boardSubRound = thisRound;
+    boardSubQuestion = q;
+    boardSubStartedAt = thisStartedAt;
+    boardSubEntries = {};
+    boardSubPlacedCount = 0;
+    boardImages = boardImages.filter(function(o){ return !o.subClientId; });
+    if (selectedImageId && !getSelectedImage()) selectedImageId = null;
+    updateBoardToolUI();
+    renderSubList(); renderSubLeaderboard();
+    redrawBoard();
+    persistSubState(true, boardSubRound, q, boardSubStartedAt, imageDataUrl);
+  });
 });
 
-function setBoardBackgroundFromStage(){
-  if (typeof html2canvas === "undefined"){ alert("背景截图工具还没加载好，请稍等几秒再试一次。"); return; }
+function captureStageCanvas(){
+  if (typeof html2canvas === "undefined") return Promise.reject(new Error("html2canvas 还没加载好"));
   var stageEl = document.getElementById("stage");
-  html2canvas(stageEl, {
+  return html2canvas(stageEl, {
     backgroundColor:"#ffffff",
     scale:2,
     ignoreElements: function(node){
@@ -2389,9 +2416,18 @@ function setBoardBackgroundFromStage(){
       // 截图时要跳过它（还有举手统计弹窗），不然截出来的背景会变成灰蒙蒙一片。
       return node.id === "boardOverlay" || node.id === "pollOverlay";
     }
-  }).then(function(shot){
+  });
+}
+function setBoardBackgroundFromStage(){
+  captureStageCanvas().then(function(shot){
     placeNewImage(shot);
-  }).catch(function(){ alert("截图失败，请再试一次。"); });
+  }).catch(function(){ alert("截图失败，请稍等几秒再试一次。"); });
+}
+/* 给「各自练习」的「附上本页图片」选项用：截同一张图，转成字符串（dataURL）
+   才能存进 live_board 发给每个学生，学生那边用 <img> 载入，不会执行任何
+   程序码，安全性跟原本「插入图片」「学生提交画面」是一样的。 */
+function captureStageImage(){
+  return captureStageCanvas().then(function(shot){ return shot.toDataURL("image/jpeg", 0.85); });
 }
 
 function handleBoardImageFile(file){
