@@ -14,15 +14,19 @@
     version int not null default 0,
     allowed_client_ids jsonb not null default '[]'::jsonb,
     snapshot text,
+    sub_active boolean not null default false,
+    sub_round int not null default 0,
     updated_at timestamptz not null default now()
   );
   insert into live_board (id, version, allowed_client_ids)
     values ('current', 0, '[]'::jsonb)
     on conflict (id) do nothing;
 
-  -- 如果之前已经建过 live_board 表（旧版本用的是 drawing_enabled 布尔栏位），
-  -- 只需要多跑这一行，把新栏位加上去就好，不用重建整张表：
+  -- 如果之前已经建过 live_board 表（旧版本用的是 drawing_enabled 布尔栏位，
+  -- 或者还没有个人练习功能），只需要多跑这几行，把新栏位加上去就好，不用重建整张表：
   -- alter table live_board add column if not exists allowed_client_ids jsonb not null default '[]'::jsonb;
+  -- alter table live_board add column if not exists sub_active boolean not null default false;
+  -- alter table live_board add column if not exists sub_round integer not null default 0;
 
   alter table live_board enable row level security;
 
@@ -36,16 +40,45 @@
   grant usage on schema public to anon, authenticated;
   grant select, insert, update on live_board to anon;
 
-  跑完以上 SQL 后，记得到 Database → Publications，把 live_board 这张表
-  也加进 supabase_realtime，不然老师授权、清空/换背景时，学生端不会自动
-  更新（要手动刷新才看得到）。画笔笔画本身是用 Supabase Realtime 的
-  「广播」(broadcast) 即时传送的，不需要额外设置；学生名单则是用
-  Supabase Realtime 的「presence」功能即时显示，同样不需要额外设置。
+  -- 「各自练习」模式：每个被授权的学生会拿到一个只有自己看得到的空白画板，
+  -- 写完按「提交」，画面会存进这张新表，老师端会即时收到、显示成可以拖动/
+  -- 缩放的小图，方便一次检查全班的做法（不用大家轮流用同一块画板）。
+  create table if not exists board_submissions (
+    round integer not null,
+    client_id text not null,
+    name text not null,
+    snapshot text not null,
+    updated_at timestamptz not null default now(),
+    primary key (round, client_id)
+  );
+  alter table board_submissions enable row level security;
+  drop policy if exists "anyone can read submissions" on board_submissions;
+  create policy "anyone can read submissions" on board_submissions for select to anon using (true);
+  drop policy if exists "anyone can write submissions" on board_submissions;
+  create policy "anyone can write submissions" on board_submissions for insert to anon with check (true);
+  drop policy if exists "anyone can update submissions" on board_submissions;
+  create policy "anyone can update submissions" on board_submissions for update to anon using (true) with check (true);
+  grant select, insert, update on board_submissions to anon;
+
+  跑完以上 SQL 后，记得到 Database → Publications，把 live_board 和
+  board_submissions 这两张表都加进 supabase_realtime，不然老师授权、清空/
+  换背景、收到学生提交时，另一边不会自动更新（要手动刷新才看得到）。画笔
+  笔画本身是用 Supabase Realtime 的「广播」(broadcast) 即时传送的，不需要
+  额外设置；学生名单则是用 Supabase Realtime 的「presence」功能即时显示，
+  同样不需要额外设置。
 
   权限模式：学生进入这个页面时会先输入名字，老师在课堂手册的「共享白板」
   面板里会看到即时更新的在线学生名单，勾选哪个学生的名字，那个学生才能
-  画；没被勾选的学生只能看，不能画（但大家都看得到老师和被授权同学正在
-  画的内容）。
+  画；没被勾选的学生只能看，不能画。
+
+  两种画画模式：
+  1. 共享模式（预设）：被授权的学生跟老师画在同一块板上，大家都看得到
+     即时画面。
+  2. 各自练习模式：老师在「共享白板」面板按「开始各自练习」后，被授权的
+     学生会各自拿到一块「只有自己看得到」的空白画板，写完按「提交给
+     老师」；老师那边会自动出现每个学生的画面（小图，标着名字），老师
+     可以拖动、放大缩小来检查每个人的步骤——这样即使一班很多人，大家
+     也都有自己的画板可以参与，不用轮流等一块共享板。
 
   部署方式：把这个文件跟 index.html、y3-unit9-vote.html、
   y3-unit9-lesson-vercel.html 放在同一个 GitHub 仓库根目录下，一起推上
@@ -88,6 +121,8 @@
   .color.active{ border-color:var(--ink); box-shadow:0 0 0 2px var(--panel), 0 0 0 4px var(--ink); }
   .eraser{ background:#FFEFD6; border:1px solid var(--line); border-radius:999px; padding:7px 14px; font-weight:700; font-size:13px; cursor:pointer; }
   .eraser.active{ background:var(--primary); color:#fff; border-color:transparent; }
+  #submitBtn{ background:var(--secondary); color:#fff; border-color:transparent; }
+  #submitBtn.submitted{ background:#8FD9D0; }
   .canvas-wrap{ position:relative; flex:1; background:#fff; }
   canvas{ display:block; width:100%; height:100%; touch-action:none; cursor:crosshair; }
   .viewonly{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,.72); font-weight:800; font-size:16px; color:var(--ink-soft); text-align:center; padding:24px; }
@@ -119,6 +154,8 @@
     <button class="color" data-color="#2EC4B6" style="background:#2EC4B6" type="button" aria-label="绿色"></button>
     <button class="color" data-color="#5AC8FA" style="background:#5AC8FA" type="button" aria-label="蓝色"></button>
     <button class="eraser" id="eraserBtn" type="button">🧹 橡皮擦</button>
+    <button class="eraser" id="submitBtn" type="button" hidden>📤 提交给老师</button>
+    <span id="submitStatus" style="font-size:12.5px;font-weight:700;color:var(--ink-soft);"></span>
   </div>
   <div class="canvas-wrap" id="canvasWrap" hidden>
     <canvas id="boardCanvas" width="1280" height="800"></canvas>
@@ -149,6 +186,8 @@
     var viewonlyEl = document.getElementById("viewonlyBanner");
     var waitingEl = document.getElementById("waitingBanner");
     var changeNameBtn = document.getElementById("changeNameBtn");
+    var submitBtn = document.getElementById("submitBtn");
+    var submitStatusEl = document.getElementById("submitStatus");
 
     var myName = "";
     var myClientId = "";
@@ -159,6 +198,9 @@
     var boardStateLoaded = false;
     var allowedIds = [];
     var drawingEnabled = false;
+    var subActive = false; // 老师是否开启了「各自练习」模式
+    var subRound = 0;
+    var submitted = false; // 这一轮是否已经提交过
     var color = "#2B2A33";
     var erasing = false;
     var isDrawing = false;
@@ -270,11 +312,11 @@
     }
 
     function broadcastStroke(strokeId, owner, x0,y0,x1,y1,c,size){
-      if (!channel) return;
+      if (!channel || subActive) return; // 各自练习模式下是私人画板，不广播给其他人
       channel.send({ type:"broadcast", event:"stroke", payload:{strokeId:strokeId, owner:owner, x0:x0,y0:y0,x1:x1,y1:y1,color:c,size:size} });
     }
     function broadcastErase(strokeId){
-      if (!channel) return;
+      if (!channel || subActive) return;
       channel.send({ type:"broadcast", event:"eraseStroke", payload:{strokeId:strokeId} });
     }
 
@@ -284,6 +326,7 @@
       isDrawing = true;
       var pos = getPos(e);
       lastPos = pos;
+      if (subActive && submitted){ submitted = false; updateSubmitUI(); }
       if (erasing){
         eraseBoardAt(pos);
       } else {
@@ -320,7 +363,7 @@
       snapshotTimer = setTimeout(saveSnapshot, 1200);
     }
     function saveSnapshot(){
-      if (!client) return;
+      if (!client || subActive) return; // 各自练习模式下画面是私人的，不能拿去覆盖共享白板的存档
       var dataUrl = canvas.toDataURL("image/png");
       client.from("live_board").upsert({ id:"current", version:boardVersion, snapshot:dataUrl, updated_at:new Date().toISOString() });
     }
@@ -336,15 +379,47 @@
     function updatePermissionUI(){
       toolbarEl.hidden = !drawingEnabled;
       viewonlyEl.hidden = drawingEnabled;
+      if (!drawingEnabled){
+        viewonlyEl.textContent = subActive
+          ? "老师正在收集大家各自的练习，等老师授权你就能开始画自己的画板 👀"
+          : "老师还没授权你绘图，你现在只能看 👀";
+      }
+      submitBtn.hidden = !(drawingEnabled && subActive);
+      updateSubmitUI();
+    }
+
+    function updateSubmitUI(){
+      if (!drawingEnabled || !subActive) return;
+      submitBtn.classList.toggle("submitted", submitted);
+      submitBtn.textContent = submitted ? "✅ 已提交（可再改再交）" : "📤 提交给老师";
+      submitStatusEl.textContent = submitted ? "" : "写完记得按提交，老师才看得到你的画面～";
     }
 
     /* 每次跟服务器对齐状态时，只有版本真的变了（老师把统计图设成背景，或清空了画板）
-       才会重置成新的「压平底图」，避免重复叠图，也避免让「只能擦自己的」失效。 */
+       才会重置成新的「压平底图」，避免重复叠图，也避免让「只能擦自己的」失效。
+       「各自练习」模式下不理会共享画板的版本号——只看 sub_round 有没有变，
+       变了就表示老师开了新一轮，学生这边要清空重新开始。 */
     function applyRow(row){
       if (!row) return;
       allowedIds = Array.isArray(row.allowed_client_ids) ? row.allowed_client_ids : [];
       drawingEnabled = allowedIds.indexOf(myClientId) >= 0;
+      var nowSubActive = !!row.sub_active;
+      var nowSubRound = row.sub_round || 0;
+      var subJustChanged = (nowSubActive !== subActive) || (nowSubRound !== subRound);
+      subActive = nowSubActive;
+      subRound = nowSubRound;
       updatePermissionUI();
+      if (subActive){
+        if (subJustChanged){
+          boardStrokes = [];
+          boardBgImage = null;
+          currentStroke = null;
+          submitted = false;
+          redrawBoard();
+          updateSubmitUI();
+        }
+        return;
+      }
       var v = row.version || 0;
       if (!boardStateLoaded || v !== boardVersion){
         boardVersion = v;
@@ -353,6 +428,23 @@
         loadImage(row.snapshot);
       }
     }
+
+    submitBtn.addEventListener("click", function(){
+      if (!client || !drawingEnabled || !subActive) return;
+      var dataUrl = canvas.toDataURL("image/png");
+      submitStatusEl.textContent = "提交中…";
+      client.from("board_submissions").upsert({
+        round: subRound, client_id: myClientId, name: myName, snapshot: dataUrl, updated_at: new Date().toISOString()
+      }).then(function(res){
+        if (res.error){
+          submitStatusEl.textContent = "";
+          alert("❌ 提交失败：" + res.error.message + "\n\n很可能是 Supabase 还没建 board_submissions 表，请照页面开头注释里的 SQL 建表。");
+        } else {
+          submitted = true;
+          updateSubmitUI();
+        }
+      });
+    });
 
     document.querySelectorAll(".color").forEach(function(b){
       b.addEventListener("click", function(){
@@ -397,6 +489,7 @@
 
       channel = client.channel("board-live")
         .on("broadcast", { event:"stroke" }, function(msg){
+          if (subActive) return; // 各自练习模式下不理会共享白板的画面
           var p = msg.payload;
           if (!p) return;
           var stroke = null;
@@ -406,6 +499,7 @@
           drawSegment(p.x0,p.y0,p.x1,p.y1,p.color,p.size);
         })
         .on("broadcast", { event:"eraseStroke" }, function(msg){
+          if (subActive) return;
           var p = msg.payload;
           if (!p) return;
           for (var i=0;i<boardStrokes.length;i++){ if (boardStrokes[i].id===p.strokeId){ boardStrokes.splice(i,1); break; } }
@@ -413,6 +507,7 @@
         })
         .on("broadcast", { event:"strokeUpdate" }, function(msg){
           // 老师画的直线/矩形/圆形，或者被老师拖动过位置的笔画，会整个一起同步过来
+          if (subActive) return;
           var p = msg.payload;
           if (!p) return;
           var obj = { id:p.id, type:p.type, owner:p.owner, color:p.color, size:p.size, x1:p.x1, y1:p.y1, x2:p.x2, y2:p.y2, pts:p.pts };
@@ -454,6 +549,7 @@
       channel = null; presenceChannel = null; client = null;
       boardStrokes = []; boardBgImage = null; boardStateLoaded = false; boardVersion = 0;
       allowedIds = []; drawingEnabled = false; currentStroke = null; isDrawing = false;
+      subActive = false; subRound = 0; submitted = false;
     }
     function switchName(){
       leaveBoardConnections();
