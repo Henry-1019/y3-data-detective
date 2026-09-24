@@ -16,6 +16,8 @@
     snapshot text,
     sub_active boolean not null default false,
     sub_round int not null default 0,
+    sub_question text not null default '',
+    sub_started_at timestamptz,
     updated_at timestamptz not null default now()
   );
   insert into live_board (id, version, allowed_client_ids)
@@ -27,6 +29,8 @@
   -- alter table live_board add column if not exists allowed_client_ids jsonb not null default '[]'::jsonb;
   -- alter table live_board add column if not exists sub_active boolean not null default false;
   -- alter table live_board add column if not exists sub_round integer not null default 0;
+  -- alter table live_board add column if not exists sub_question text not null default '';
+  -- alter table live_board add column if not exists sub_started_at timestamptz;
 
   alter table live_board enable row level security;
 
@@ -74,10 +78,12 @@
   两种画画模式：
   1. 共享模式（预设）：被授权的学生跟老师画在同一块板上，大家都看得到
      即时画面。
-  2. 各自练习模式：老师在「共享白板」面板按「开始各自练习」后，被授权的
-     学生会各自拿到一块「只有自己看得到」的空白画板，写完按「提交给
-     老师」；老师那边会自动出现每个学生的画面（小图，标着名字），老师
-     可以拖动、放大缩小来检查每个人的步骤——这样即使一班很多人，大家
+  2. 各自练习模式：老师在「共享白板」面板写一句题目、按「发布题目并开始」
+     后，被授权的学生画板上方会先出现老师布置的题目，然后各自拿到一块
+     「只有自己看得到」的空白画板，写完按「提交给老师」；老师那边会自动
+     出现每个学生的画面（小图，标着名字），老师可以拖动、放大缩小来检查
+     每个人的步骤，还能帮每份提交打 ✅/❌，自动算出交题最快又答对的前三名
+     （排行榜）——这样即使一班很多人，大家
      也都有自己的画板可以参与，不用轮流等一块共享板。
 
   部署方式：把这个文件跟 index.html、y3-unit9-vote.html、
@@ -123,6 +129,7 @@
   .eraser.active{ background:var(--primary); color:#fff; border-color:transparent; }
   #submitBtn{ background:var(--secondary); color:#fff; border-color:transparent; }
   #submitBtn.submitted{ background:#8FD9D0; }
+  .sub-question{ background:#FFF1DC; border-bottom:1px solid var(--line); padding:10px 16px; font-weight:800; font-size:14.5px; color:var(--primary-ink,var(--ink)); }
   .canvas-wrap{ position:relative; flex:1; background:#fff; }
   canvas{ display:block; width:100%; height:100%; touch-action:none; cursor:crosshair; }
   .viewonly{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,.72); font-weight:800; font-size:16px; color:var(--ink-soft); text-align:center; padding:24px; }
@@ -157,6 +164,7 @@
     <button class="eraser" id="submitBtn" type="button" hidden>📤 提交给老师</button>
     <span id="submitStatus" style="font-size:12.5px;font-weight:700;color:var(--ink-soft);"></span>
   </div>
+  <div class="sub-question" id="subQuestionBanner" hidden></div>
   <div class="canvas-wrap" id="canvasWrap" hidden>
     <canvas id="boardCanvas" width="1280" height="800"></canvas>
     <div class="viewonly" id="viewonlyBanner" hidden>老师还没授权你绘图，你现在只能看 👀</div>
@@ -188,6 +196,7 @@
     var changeNameBtn = document.getElementById("changeNameBtn");
     var submitBtn = document.getElementById("submitBtn");
     var submitStatusEl = document.getElementById("submitStatus");
+    var subQuestionEl = document.getElementById("subQuestionBanner");
 
     var myName = "";
     var myClientId = "";
@@ -200,6 +209,7 @@
     var drawingEnabled = false;
     var subActive = false; // 老师是否开启了「各自练习」模式
     var subRound = 0;
+    var subQuestion = ""; // 老师这一轮布置的题目
     var submitted = false; // 这一轮是否已经提交过
     var color = "#2B2A33";
     var erasing = false;
@@ -385,6 +395,8 @@
           : "老师还没授权你绘图，你现在只能看 👀";
       }
       submitBtn.hidden = !(drawingEnabled && subActive);
+      subQuestionEl.hidden = !(subActive && drawingEnabled && subQuestion);
+      if (!subQuestionEl.hidden) subQuestionEl.textContent = "📌 题目：" + subQuestion;
       updateSubmitUI();
     }
 
@@ -408,6 +420,7 @@
       var subJustChanged = (nowSubActive !== subActive) || (nowSubRound !== subRound);
       subActive = nowSubActive;
       subRound = nowSubRound;
+      subQuestion = row.sub_question || "";
       updatePermissionUI();
       if (subActive){
         if (subJustChanged){
@@ -549,7 +562,7 @@
       channel = null; presenceChannel = null; client = null;
       boardStrokes = []; boardBgImage = null; boardStateLoaded = false; boardVersion = 0;
       allowedIds = []; drawingEnabled = false; currentStroke = null; isDrawing = false;
-      subActive = false; subRound = 0; submitted = false;
+      subActive = false; subRound = 0; subQuestion = ""; submitted = false;
     }
     function switchName(){
       leaveBoardConnections();
