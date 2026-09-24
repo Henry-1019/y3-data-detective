@@ -15,15 +15,20 @@
     question text not null default '',
     options jsonb not null default '[]'::jsonb,
     correct_option text,
+    mode text not null default 'choice',
+    payload jsonb,
     updated_at timestamptz not null default now()
   );
   insert into live_poll (id, version, question, options)
     values ('current', 0, '', '[]'::jsonb)
     on conflict (id) do nothing;
 
-  -- 如果之前已经建过 live_poll / live_votes 表（还没有姓名/正确答案功能），
-  -- 只需要多跑这几行，把新栏位加上去就好，不用重建整张表：
+  -- 如果之前已经建过 live_poll / live_votes 表（还没有姓名/正确答案功能，
+  -- 或者还没有数字键盘题、拖拽题的举手统计功能），只需要多跑这几行，把新
+  -- 栏位加上去就好，不用重建整张表：
   -- alter table live_poll add column if not exists correct_option text;
+  -- alter table live_poll add column if not exists mode text not null default 'choice';
+  -- alter table live_poll add column if not exists payload jsonb;
   -- alter table live_votes add column if not exists name text not null default '';
   -- alter table live_votes add column if not exists client_id text not null default '';
 
@@ -61,8 +66,13 @@
 
   学生进入这个页面时会先输入名字（会记住，同一台设备也可以点「换名字」给
   下一位同学用），提交答案时名字会一起送过去，老师那边才知道是谁答对/答错。
-  如果老师那一题的选择题有标准答案，老师端还会自动算出「最快答对的前三名」
-  排行榜。
+  如果老师那一题有标准答案，老师端还会自动算出「最快答对的前三名」排行榜。
+
+  这一页现在支持三种题型，学生看到的画面和作答方式都跟老师端一模一样：
+  选择题/多选题（按按钮选答案）、数字键盘题（按数字键盘打字作答）、
+  拖拽题（点卡片、再点格子放上去，跟老师端一样）。老师端会用 mode 栏位
+  告诉这个页面要显示哪一种，payload 栏位（拖拽题用）带着这一题的卡片和
+  格子内容，让学生这边能生成一模一样的题目。
 
   部署方式：把这个文件跟 index.html 放在同一个 GitHub 仓库根目录下，
   一起推上 Vercel，网址就会是 你的网址.vercel.app/y3-unit9-vote.html，
@@ -71,8 +81,8 @@
 -->
 <style>
   :root{
-    --bg:#FFF6E9; --panel:#FFFFFF; --ink:#2B2A33; --ink-soft:#6B6879; --line:#EFE2CC;
-    --primary:#FF6B4A; --primary-ink:#7A2A18; --secondary:#2EC4B6; --secondary-ink:#0B4A45;
+    --bg:#FFF6E9; --bg-soft:#FFEFD6; --panel:#FFFFFF; --ink:#2B2A33; --ink-soft:#6B6879; --line:#EFE2CC;
+    --primary:#FF6B4A; --primary-ink:#7A2A18; --secondary:#2EC4B6; --secondary-ink:#0B4A45; --wrong:#E63950;
     --wrong-bg:#FFE3E7; --correct-bg:#DFF7EE; --shadow:0 10px 24px -12px rgba(43,42,51,.28);
   }
   *{ box-sizing:border-box; }
@@ -105,6 +115,31 @@
   .name-err{ font-size:12px; color:#B4242E; min-height:16px; margin-top:6px; }
   .me-row{ font-size:12.5px; color:var(--ink-soft); margin:-10px 0 16px; }
   .me-row button{ font:inherit; border:none; background:none; color:var(--primary); text-decoration:underline; cursor:pointer; padding:0; margin-left:4px; }
+
+  /* 数字键盘作答：跟老师端 makeNumberPad 长得、用起来都一样 */
+  .numpad-wrap{ display:flex; flex-direction:column; align-items:center; gap:14px; }
+  .numpad-display{ font-family:"Fredoka","Noto Sans SC",sans-serif; font-size:32px; font-weight:800; min-width:120px; text-align:center; padding:10px 22px; border-radius:16px; border:2px solid var(--line); background:var(--bg-soft); }
+  .numpad-display.ok{ background:var(--correct-bg); border-color:var(--secondary); }
+  .numpad-display.no{ background:var(--wrong-bg); border-color:var(--wrong); }
+  .numpad-grid{ display:grid; grid-template-columns:repeat(3,64px); gap:10px; justify-content:center; }
+  .numpad-key{ padding:14px 0; border-radius:14px; border:2px solid var(--line); background:var(--panel); font:inherit; font-weight:800; font-size:20px; cursor:pointer; }
+  .numpad-key.go{ background:var(--primary); color:#fff; border-color:transparent; }
+  .numpad-key[disabled]{ opacity:.6; cursor:default; }
+
+  /* 拖拽作答：跟老师端 makeDragBlank 长得、用起来都一样（点卡片再点格子） */
+  .dragblank-wrap{ display:flex; flex-direction:column; align-items:center; gap:16px; width:100%; }
+  .dragblank-slots{ display:flex; gap:12px; flex-wrap:wrap; justify-content:center; }
+  .dragblank-col{ display:flex; flex-direction:column; align-items:center; gap:6px; }
+  .dragblank-caption{ font-size:12px; color:var(--ink-soft); font-weight:700; max-width:100px; text-align:center; }
+  .drag-slot{ min-width:58px; min-height:42px; border:2px dashed var(--line); border-radius:14px; background:var(--bg-soft); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:16px; cursor:pointer; padding:6px 10px; }
+  .drag-slot.filled{ border-style:solid; background:var(--panel); }
+  .dragblank-pool{ display:flex; gap:10px; flex-wrap:wrap; justify-content:center; padding-top:10px; border-top:1px dashed var(--line); }
+  .drag-chip{ padding:10px 16px; border-radius:12px; border:2px solid var(--line); background:var(--panel); font-weight:800; font-size:15px; cursor:pointer; user-select:none; }
+  .drag-chip.selected{ border-color:var(--primary); background:var(--wrong-bg); }
+  .drag-chip.used{ opacity:.3; cursor:default; }
+  .drag-hint{ font-size:12px; color:var(--ink-soft); margin:-6px 0 0; }
+  .drag-submit{ font:inherit; font-weight:800; font-size:15px; background:var(--primary); color:#fff; border:none; border-radius:14px; padding:12px 22px; cursor:pointer; margin-top:4px; }
+  .drag-submit[disabled]{ opacity:.5; cursor:default; }
 </style>
 </head>
 <body>
@@ -157,12 +192,29 @@
       app.appendChild(el("div", "waiting", msg || "正在连线，等待老师发布题目…"));
     }
 
-    function renderQuestion(poll){
-      clearEl(app);
-      app.appendChild(el("div", "qtext", poll.question || "（本题）"));
+    /* 三种题型最后都是把一个「答案字符串」交给这个函数去提交，
+       字符串的拼法要跟老师端 scrapeCurrentQuestion() 算 correct_option
+       用的拼法完全一致，老师那边才能正确判断对错、算排行榜。 */
+    function submitAnswer(poll, choiceStr, hooks){
+      client.from("live_votes").insert({ version: poll.version, choice: choiceStr, name: myName, client_id: myClientId }).then(function(res){
+        if (res.error){
+          hooks.statusEl.textContent = "提交失败：" + res.error.message;
+          hooks.statusEl.className = "status no";
+          hooks.unlock();
+          return;
+        }
+        try { localStorage.setItem(votedKey(poll.version), "1"); } catch (e) {}
+        hooks.statusEl.textContent = "🎉 提交成功！等老师公布结果吧～";
+        hooks.statusEl.className = "status";
+      }).catch(function(){
+        hooks.statusEl.textContent = "网络有问题，请再点一次。";
+        hooks.statusEl.className = "status no";
+        hooks.unlock();
+      });
+    }
+
+    function renderChoiceQuestion(poll, alreadyVoted){
       var opts = el("div", "opts");
-      var alreadyVoted = false;
-      try { alreadyVoted = !!localStorage.getItem(votedKey(poll.version)); } catch (e) {}
       var status = el("div", "status", alreadyVoted ? "你已经提交过这一题的答案啦～" : "");
       (poll.options || []).forEach(function(opt){
         var b = el("button", "opt-btn", opt);
@@ -172,22 +224,9 @@
           if (b.disabled) return;
           opts.querySelectorAll(".opt-btn").forEach(function(x){ x.disabled = true; });
           b.classList.add("picked");
-          client.from("live_votes").insert({ version: poll.version, choice: opt, name: myName, client_id: myClientId }).then(function(res){
-            if (res.error){
-              status.textContent = "提交失败：" + res.error.message;
-              status.className = "status no";
-              opts.querySelectorAll(".opt-btn").forEach(function(x){ x.disabled = false; });
-              b.classList.remove("picked");
-              return;
-            }
-            try { localStorage.setItem(votedKey(poll.version), "1"); } catch (e) {}
-            status.textContent = "🎉 提交成功！等老师公布结果吧～";
-            status.className = "status";
-          }).catch(function(){
-            status.textContent = "网络有问题，请再点一次。";
-            status.className = "status no";
-            opts.querySelectorAll(".opt-btn").forEach(function(x){ x.disabled = false; });
-            b.classList.remove("picked");
+          submitAnswer(poll, opt, {
+            statusEl: status,
+            unlock: function(){ opts.querySelectorAll(".opt-btn").forEach(function(x){ x.disabled = false; }); b.classList.remove("picked"); }
           });
         });
         opts.appendChild(b);
@@ -196,8 +235,168 @@
       app.appendChild(status);
     }
 
+    /* 数字键盘作答：跟老师端 makeNumberPad 一样的按键、一样的按法 */
+    function renderNumpadQuestion(poll, alreadyVoted){
+      var wrap = el("div", "numpad-wrap");
+      var display = el("div", "numpad-display", "＿");
+      wrap.appendChild(display);
+      var value = "";
+      function render(){ display.textContent = value.length ? value : "＿"; }
+      var grid = el("div", "numpad-grid");
+      var status = el("div", "status", alreadyVoted ? "你已经提交过这一题的答案啦～" : "");
+      var locked = alreadyVoted;
+      function submit(){
+        if (locked || !value.length) return;
+        locked = true;
+        grid.querySelectorAll(".numpad-key").forEach(function(b){ b.disabled = true; });
+        var choiceStr = String(Number(value));
+        submitAnswer(poll, choiceStr, {
+          statusEl: status,
+          unlock: function(){ locked = false; grid.querySelectorAll(".numpad-key").forEach(function(b){ b.disabled = false; }); }
+        });
+      }
+      ["1","2","3","4","5","6","7","8","9","⌫","0","✓"].forEach(function(k){
+        var b = el("button", "numpad-key", k);
+        b.type = "button";
+        if (k === "✓") b.classList.add("go");
+        if (locked) b.disabled = true;
+        b.addEventListener("click", function(){
+          if (locked) return;
+          if (k === "⌫"){ value = value.slice(0, -1); render(); return; }
+          if (k === "✓"){ submit(); return; }
+          if (value.length >= 5) return;
+          value += k; render();
+        });
+        grid.appendChild(b);
+      });
+      wrap.appendChild(grid);
+      app.appendChild(wrap);
+      app.appendChild(status);
+    }
+
+    /* 拖拽作答：跟老师端 makeDragBlank 一样，点卡片、再点格子放上去
+       （手机上直接点，效果等同于拖拽，不用真的拖来拖去也一样方便）。
+       payload 里的 tokens/blanks 跟老师端当下那一题的内容完全一样。 */
+    function renderDragQuestion(poll, alreadyVoted){
+      var payload = poll.payload || {};
+      var tokens = payload.tokens || [];
+      var blanks = payload.blanks || [];
+      if (!tokens.length || !blanks.length){
+        app.appendChild(el("div", "waiting", "题目内容有点问题，请等老师重新发布。"));
+        return;
+      }
+      var wrap = el("div", "dragblank-wrap");
+      var blankRow = el("div", "dragblank-slots");
+      var slotEls = {};
+      var chipEls = {};
+      var selectedChip = null;
+      var locked = alreadyVoted;
+
+      function placeToken(chip, slot){
+        if (selectedChip === chip){ selectedChip.classList.remove("selected"); selectedChip = null; }
+        slot.dataset.filled = chip.dataset.tokenId;
+        slot.textContent = chip.textContent;
+        slot.classList.add("filled");
+        chip.classList.add("used");
+        submitBtn.disabled = !blanks.every(function(b){ return !!slotEls[b.id].dataset.filled; });
+      }
+
+      blanks.forEach(function(b){
+        var slot = el("div", "drag-slot", "");
+        slot.dataset.blankId = b.id;
+        slot.dataset.filled = "";
+        slotEls[b.id] = slot;
+        slot.addEventListener("click", function(){
+          if (locked) return;
+          if (slot.dataset.filled){
+            var tokId = slot.dataset.filled;
+            var chip = chipEls[tokId];
+            if (chip) chip.classList.remove("used");
+            slot.dataset.filled = "";
+            slot.textContent = "";
+            slot.classList.remove("filled");
+            submitBtn.disabled = true;
+          } else if (selectedChip){
+            placeToken(selectedChip, slot);
+          }
+        });
+        if (b.label){
+          var col = el("div", "dragblank-col");
+          col.appendChild(el("div", "dragblank-caption", b.label));
+          col.appendChild(slot);
+          blankRow.appendChild(col);
+        } else {
+          blankRow.appendChild(slot);
+        }
+      });
+      wrap.appendChild(blankRow);
+
+      var pool = el("div", "dragblank-pool");
+      tokens.forEach(function(t){
+        var chip = el("div", "drag-chip", t.label);
+        chip.dataset.tokenId = t.id;
+        chipEls[t.id] = chip;
+        chip.addEventListener("click", function(){
+          if (locked || chip.classList.contains("used")) return;
+          if (selectedChip === chip){ chip.classList.remove("selected"); selectedChip = null; return; }
+          if (selectedChip) selectedChip.classList.remove("selected");
+          selectedChip = chip; chip.classList.add("selected");
+        });
+        pool.appendChild(chip);
+      });
+      wrap.appendChild(pool);
+
+      var hint = el("div", "drag-hint", "☝️ 先点一下卡片，再点上面对应的格子。");
+      wrap.appendChild(hint);
+
+      var status = el("div", "status", alreadyVoted ? "你已经提交过这一题的答案啦～" : "");
+      var submitBtn = el("button", "drag-submit", "✅ 提交答案");
+      submitBtn.type = "button";
+      submitBtn.disabled = true;
+      submitBtn.addEventListener("click", function(){
+        if (locked) return;
+        var allFilled = blanks.every(function(b){ return !!slotEls[b.id].dataset.filled; });
+        if (!allFilled) return;
+        locked = true;
+        submitBtn.disabled = true;
+        var assembled = blanks.map(function(b){
+          var tokId = slotEls[b.id].dataset.filled;
+          var tok = tokens.filter(function(t){ return t.id === tokId; })[0];
+          return tok ? tok.label : "";
+        }).join("|");
+        submitAnswer(poll, assembled, {
+          statusEl: status,
+          unlock: function(){ locked = false; submitBtn.disabled = false; }
+        });
+      });
+      if (locked) submitBtn.disabled = true;
+      wrap.appendChild(submitBtn);
+
+      app.appendChild(wrap);
+      app.appendChild(status);
+    }
+
+    function renderQuestion(poll){
+      clearEl(app);
+      app.appendChild(el("div", "qtext", poll.question || "（本题）"));
+      var alreadyVoted = false;
+      try { alreadyVoted = !!localStorage.getItem(votedKey(poll.version)); } catch (e) {}
+      var mode = poll.mode || "choice";
+      if (mode === "numpad") renderNumpadQuestion(poll, alreadyVoted);
+      else if (mode === "drag") renderDragQuestion(poll, alreadyVoted);
+      else renderChoiceQuestion(poll, alreadyVoted);
+    }
+
+    function hasUsableQuestion(row){
+      if (!row || !row.version) return false;
+      var mode = row.mode || "choice";
+      if (mode === "numpad") return row.correct_option != null && row.correct_option !== "";
+      if (mode === "drag") return !!(row.payload && row.payload.tokens && row.payload.tokens.length && row.payload.blanks && row.payload.blanks.length);
+      return !!(row.options && row.options.length);
+    }
+
     function applyPoll(row){
-      if (!row || !row.version || !row.options || !row.options.length){
+      if (!hasUsableQuestion(row)){
         renderWaiting();
         return;
       }
