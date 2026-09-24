@@ -472,6 +472,7 @@ function makeMultiSelect(container, options, correctSet, onDone){
 /* ---- 数字键盘输入：不给选项，自己按数字作答 ---- */
 function makeNumberPad(container, correctValue, onDone){
   var wrap = el("div","numpad-wrap");
+  wrap.dataset.correctValue = String(correctValue); // 给「举手统计」拿去生成选项用的，不影响外观
   var display = el("div","numpad-display","＿");
   wrap.appendChild(display);
   var value = "";
@@ -506,6 +507,13 @@ function makeNumberPad(container, correctValue, onDone){
 /* ---- 拖拽题：把卡片拖（或点选后再点目标）放进格子里，也可用来做排序题 ---- */
 function makeDragBlank(container, tokens, blanks, onDone){
   var wrap = el("div","dragblank-wrap");
+  try { // 给「举手统计」拿去生成选项用的，不影响外观
+    var tokenLabelById = {};
+    tokens.forEach(function(t){ tokenLabelById[t.id] = t.label; });
+    var correctLabels = blanks.map(function(b){ return tokenLabelById[b.correct] || "?"; });
+    wrap.dataset.dragCorrect = JSON.stringify(correctLabels);
+    wrap.dataset.dragTokens = JSON.stringify(tokens.map(function(t){ return t.label; }));
+  } catch(e){}
   var blankRow = el("div","dragblank-slots");
   var slotEls = {};
   var chipEls = {};
@@ -590,7 +598,7 @@ function makeDragBlank(container, tokens, blanks, onDone){
   });
   wrap.appendChild(pool);
 
-  var hint = el("div","instr","☝️ 用手指把下面的卡片拖到上面对应的格子里，也可以先点一下卡片、再点格子。");
+  var hint = el("div","instr drag-generic-hint","☝️ 用手指把下面的卡片拖到上面对应的格子里，也可以先点一下卡片、再点格子。");
   hint.style.fontSize = "12.5px"; hint.style.order = "-1";
   wrap.insertBefore(hint, blankRow);
 
@@ -1252,14 +1260,69 @@ function initPoll(){
   } catch(e){ /* Supabase unreachable — keep the button hidden, rest of the manual still works */ }
 }
 
+/* 拖拽题没有天然的「选项列表」，举手统计要给学生一组按钮选，
+   所以这里把「正确的完成结果」和几个随手打乱的「错误组合」拼成选项。 */
+function buildDragPollOptions(correctArr, poolArr){
+  var correctStr = correctArr.join(" · ");
+  var wrongs = []; var guard = 0;
+  while (wrongs.length < 2 && guard < 40){
+    guard++;
+    var combo = [];
+    for (var i=0;i<correctArr.length;i++) combo.push(poolArr[randInt(0,poolArr.length-1)]);
+    var str = combo.join(" · ");
+    if (str!==correctStr && wrongs.indexOf(str)<0) wrongs.push(str);
+  }
+  if (wrongs.length < 2 && correctArr.length>=2){
+    var swapped = correctArr.slice(); var tmp = swapped[0]; swapped[0]=swapped[1]; swapped[1]=tmp;
+    var s2 = swapped.join(" · ");
+    if (s2!==correctStr && wrongs.indexOf(s2)<0) wrongs.push(s2);
+  }
+  return { options: shuffle([correctStr].concat(wrongs)), correct: correctStr };
+}
+
 function scrapeCurrentQuestion(){
   var qEls = document.querySelectorAll("#stage .display:not(.num)");
   var qText = qEls.length ? qEls[qEls.length-1].textContent : "";
+  if (!qText){ // 拖拽题一般没有 .display 提示句，退而求其次抓题目情境的 .instr 说明文字
+    // （排除拖拽组件自带的通用操作提示「用手指把卡片拖到格子里」，那不是题目内容）
+    var instrEls = document.querySelectorAll("#stage .instr:not(.drag-generic-hint)");
+    if (instrEls.length) qText = instrEls[0].textContent;
+  }
+
+  /* 选择题 / 多选题：直接读现成的按钮 */
   var optEls = document.querySelectorAll("#stage .choices .choice");
-  var opts = Array.prototype.map.call(optEls, function(b){ return b.textContent; });
-  var correctEl = document.querySelector("#stage .choices .choice[data-correct='1']");
-  var correctAnswer = correctEl ? correctEl.textContent : null;
-  return { question: qText, options: opts, correctAnswer: correctAnswer };
+  if (optEls.length){
+    var opts = Array.prototype.map.call(optEls, function(b){ return b.textContent; });
+    var correctEl = document.querySelector("#stage .choices .choice[data-correct='1']");
+    var correctAnswer = correctEl ? correctEl.textContent : null;
+    return { question: qText, options: opts, correctAnswer: correctAnswer };
+  }
+
+  /* 数字键盘题：没有现成选项，自动生成几个接近的数字给学生选 */
+  var numEl = document.querySelector("#stage .numpad-wrap[data-correct-value]");
+  if (numEl){
+    var correctNum = Number(numEl.dataset.correctValue);
+    if (!isNaN(correctNum)){
+      var spread = Math.max(3, Math.min(20, Math.round(Math.abs(correctNum)*0.12) || 3));
+      var opts2 = uniqueOptionsAround(correctNum, 4, 0, 99999, spread).map(String);
+      return { question: qText, options: opts2, correctAnswer: String(correctNum) };
+    }
+  }
+
+  /* 拖拽题：把正确组合和几个打乱的错误组合当选项 */
+  var dragEl = document.querySelector("#stage .dragblank-wrap[data-drag-correct]");
+  if (dragEl){
+    try {
+      var correctArr = JSON.parse(dragEl.dataset.dragCorrect || "[]");
+      var poolArr = JSON.parse(dragEl.dataset.dragTokens || "[]");
+      if (correctArr.length && poolArr.length){
+        var built = buildDragPollOptions(correctArr, poolArr);
+        return { question: qText, options: built.options, correctAnswer: built.correct };
+      }
+    } catch(e){}
+  }
+
+  return { question: qText, options: [], correctAnswer: null };
 }
 
 function openPollPanel(){
@@ -1268,7 +1331,7 @@ function openPollPanel(){
   var body = $("pollBody");
   clearEl(body);
   if (!scraped.options.length){
-    body.appendChild(el("div","poll-empty","当前这一页没有选择题选项（数字键盘、拖拽题暂不支持举手统计），请切换到有选项的题目再试一次。"));
+    body.appendChild(el("div","poll-empty","侦测不到这一页的题目内容，请切换到练习题页面（选择题/多选题/数字键盘/拖拽题都支持）再试一次。"));
     return;
   }
   body.appendChild(el("div","poll-q", scraped.question || "（本题）"));
