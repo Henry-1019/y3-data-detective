@@ -325,6 +325,9 @@
         <button class="board-color" data-color="#5AC8FA" style="background:#5AC8FA" type="button" aria-label="蓝色"></button>
         <button class="board-eraser" id="boardEraser" type="button">🧹 橡皮擦</button>
         <button class="board-mini-btn" id="boardSelectBtn" type="button">🖱️ 选取/移动</button>
+        <button class="board-mini-btn" id="boardLineBtn" type="button">📏 直线</button>
+        <button class="board-mini-btn" id="boardRectBtn" type="button">⬜ 矩形</button>
+        <button class="board-mini-btn" id="boardEllipseBtn" type="button">⭕ 圆形</button>
       </div>
       <div class="board-actions-row">
         <button class="board-mini-btn" id="boardBgBtn" type="button">📊 把本页统计图放上画板</button>
@@ -341,6 +344,10 @@
         <button class="board-mini-btn" id="boardCropConfirmBtn" type="button">✅ 确定裁剪</button>
         <button class="board-mini-btn" id="boardCropCancelBtn" type="button">✖️ 取消裁剪</button>
         <span class="board-roster-hint" style="margin:0;">☝️ 拖动橙色框选出要保留的部分，拖右下角圆点调整框的大小。</span>
+      </div>
+      <div class="board-actions-row" id="boardStrokeSelActions" hidden>
+        <button class="board-mini-btn" id="boardDeleteStrokeBtn" type="button">🗑️ 删除这一笔</button>
+        <span class="board-roster-hint" style="margin:0;">☝️ 拖动可以移动位置；点空白处或换工具就会取消选取。</span>
       </div>
     </div>
     <div class="board-canvas-wrap">
@@ -1337,6 +1344,14 @@ var boardCropMode = false;
 var boardCropRect = null;
 var IMG_HANDLE = 24;
 
+/* 直线／矩形／圆形工具：拖出形状后会自动变成「选取」状态，方便立刻再调整位置；
+   跟笔画一样，形状会一直留在画板上（可以随时用「选取/移动」工具拖动、用橡皮擦擦掉），
+   不会像图片那样在换工具后被压平定型。 */
+var boardShapeTool = null; // null | "line" | "rect" | "ellipse"
+var boardCurrentShape = null;
+var boardShapeSeq = 0;
+var selectedStrokeId = null;
+
 function initBoardButton(){
   $("boardBtn").hidden = false;
 }
@@ -1384,16 +1399,27 @@ function redrawBoard(){
     }
   });
   boardStrokes.forEach(function(s){
-    if (!s.pts || !s.pts.length) return;
     boardCtx.save();
     boardCtx.lineCap = "round"; boardCtx.lineJoin = "round";
     boardCtx.globalCompositeOperation = "source-over";
     boardCtx.strokeStyle = s.color; boardCtx.lineWidth = s.size;
-    if (s.pts.length === 1){
+    if (s.type === "line"){
+      boardCtx.beginPath();
+      boardCtx.moveTo(s.x1, s.y1); boardCtx.lineTo(s.x2, s.y2);
+      boardCtx.stroke();
+    } else if (s.type === "rect"){
+      var rx = Math.min(s.x1,s.x2), ry = Math.min(s.y1,s.y2), rw = Math.abs(s.x2-s.x1), rh = Math.abs(s.y2-s.y1);
+      boardCtx.strokeRect(rx, ry, rw, rh);
+    } else if (s.type === "ellipse"){
+      var ecx = (s.x1+s.x2)/2, ecy = (s.y1+s.y2)/2, erx = Math.abs(s.x2-s.x1)/2, ery = Math.abs(s.y2-s.y1)/2;
+      boardCtx.beginPath();
+      boardCtx.ellipse(ecx, ecy, Math.max(erx,0.01), Math.max(ery,0.01), 0, 0, Math.PI*2);
+      boardCtx.stroke();
+    } else if (s.pts && s.pts.length === 1){
       boardCtx.beginPath();
       boardCtx.arc(s.pts[0].x, s.pts[0].y, s.size/2, 0, Math.PI*2);
       boardCtx.fillStyle = s.color; boardCtx.fill();
-    } else {
+    } else if (s.pts && s.pts.length > 1){
       boardCtx.beginPath();
       boardCtx.moveTo(s.pts[0].x, s.pts[0].y);
       for (var i=1;i<s.pts.length;i++) boardCtx.lineTo(s.pts[i].x, s.pts[i].y);
@@ -1429,6 +1455,15 @@ function redrawBoard(){
       boardCtx.beginPath(); boardCtx.arc(sel.x+sel.w, sel.y+sel.h, 12, 0, Math.PI*2); boardCtx.fill();
       boardCtx.restore();
     }
+    var selS = getSelectedStroke();
+    if (selS){
+      var bb = strokeBBox(selS);
+      boardCtx.save();
+      boardCtx.strokeStyle = "#2EC4B6"; boardCtx.lineWidth = 3; boardCtx.setLineDash([10,6]);
+      boardCtx.strokeRect(bb.x-10, bb.y-10, bb.w+20, bb.h+20);
+      boardCtx.setLineDash([]);
+      boardCtx.restore();
+    }
   }
 }
 
@@ -1441,6 +1476,36 @@ function imageAt(pos){
 }
 function getSelectedImage(){
   for (var i=0;i<boardImages.length;i++){ if (boardImages[i].id===selectedImageId) return boardImages[i]; }
+  return null;
+}
+function getSelectedStroke(){
+  for (var i=0;i<boardStrokes.length;i++){ if (boardStrokes[i].id===selectedStrokeId) return boardStrokes[i]; }
+  return null;
+}
+function strokeBBox(s){
+  if (s.type === "line" || s.type === "rect" || s.type === "ellipse"){
+    return { x:Math.min(s.x1,s.x2), y:Math.min(s.y1,s.y2), w:Math.abs(s.x2-s.x1), h:Math.abs(s.y2-s.y1) };
+  }
+  if (!s.pts || !s.pts.length) return { x:0, y:0, w:0, h:0 };
+  var minX=s.pts[0].x, maxX=s.pts[0].x, minY=s.pts[0].y, maxY=s.pts[0].y;
+  s.pts.forEach(function(p){
+    minX = Math.min(minX,p.x); maxX = Math.max(maxX,p.x);
+    minY = Math.min(minY,p.y); maxY = Math.max(maxY,p.y);
+  });
+  return { x:minX, y:minY, w:maxX-minX, h:maxY-minY };
+}
+function translateStroke(s, dx, dy){
+  if (s.type === "line" || s.type === "rect" || s.type === "ellipse"){
+    s.x1 += dx; s.y1 += dy; s.x2 += dx; s.y2 += dy;
+  } else if (s.pts){
+    for (var i=0;i<s.pts.length;i++){ s.pts[i].x += dx; s.pts[i].y += dy; }
+  }
+}
+function strokeAt(pos){
+  for (var i=boardStrokes.length-1;i>=0;i--){
+    var s = boardStrokes[i];
+    if (boardStrokeHit(s, pos.x, pos.y, Math.max(14, (s.size||8)/2+10))) return s;
+  }
   return null;
 }
 
@@ -1475,6 +1540,9 @@ function placeNewImage(imgEl){
   var newId = "img-"+(++boardImgSeq)+"-"+Date.now();
   boardImages.push({ id:newId, img:imgEl, cropX:0,cropY:0,cropW:natW,cropH:natH, x:x,y:y,w:w,h:h });
   selectedImageId = newId;
+  selectedStrokeId = null;
+  boardShapeTool = null; boardCurrentShape = null;
+  clearShapeBtnActive();
   boardSelecting = true; boardErasing = false;
   $("boardSelectBtn").classList.add("active");
   $("boardEraser").classList.remove("active");
@@ -1486,6 +1554,12 @@ function placeNewImage(imgEl){
 function updateBoardToolUI(){
   $("boardImgSelActions").hidden = !(selectedImageId && !boardCropMode);
   $("boardCropActions").hidden = !boardCropMode;
+  $("boardStrokeSelActions").hidden = !selectedStrokeId;
+}
+function clearShapeBtnActive(){
+  $("boardLineBtn").classList.remove("active");
+  $("boardRectBtn").classList.remove("active");
+  $("boardEllipseBtn").classList.remove("active");
 }
 
 function distToBoardSeg(px,py,x1,y1,x2,y2){
@@ -1497,6 +1571,14 @@ function distToBoardSeg(px,py,x1,y1,x2,y2){
   return Math.hypot(px-cx, py-cy);
 }
 function boardStrokeHit(stroke, px, py, radius){
+  if (stroke.type === "line"){
+    return distToBoardSeg(px,py,stroke.x1,stroke.y1,stroke.x2,stroke.y2) <= radius;
+  }
+  if (stroke.type === "rect" || stroke.type === "ellipse"){
+    var minX = Math.min(stroke.x1,stroke.x2)-radius, maxX = Math.max(stroke.x1,stroke.x2)+radius;
+    var minY = Math.min(stroke.y1,stroke.y2)-radius, maxY = Math.max(stroke.y1,stroke.y2)+radius;
+    return px>=minX && px<=maxX && py>=minY && py<=maxY;
+  }
   if (!stroke.pts || !stroke.pts.length) return false;
   if (stroke.pts.length === 1){
     return Math.hypot(px-stroke.pts[0].x, py-stroke.pts[0].y) <= radius;
@@ -1529,12 +1611,28 @@ function broadcastBoardErase(strokeId){
   if (!boardChannel) return;
   boardChannel.send({ type:"broadcast", event:"eraseStroke", payload:{strokeId:strokeId} });
 }
+/* 形状（直线/矩形/圆形）和被拖动过的笔画不是一段一段广播的，
+   而是每次变动就把完整的最新形状/位置发出去，让学生那边直接对齐。 */
+function broadcastStrokeUpdate(s){
+  if (!boardChannel) return;
+  boardChannel.send({ type:"broadcast", event:"strokeUpdate", payload:{
+    id:s.id, type:s.type||"pen", owner:s.owner, color:s.color, size:s.size,
+    x1:s.x1, y1:s.y1, x2:s.x2, y2:s.y2, pts:s.pts
+  }});
+}
 
 function boardPointerDown(e){
   e.preventDefault();
   boardIsDrawing = true;
   var pos = getBoardPos(e);
   boardLastPos = pos;
+
+  if (boardShapeTool){
+    var newShape = { id: TEACHER_OWNER+"-shp-"+(++boardShapeSeq)+"-"+Date.now(), type: boardShapeTool, owner: TEACHER_OWNER, color: boardColor, size: 8, x1:pos.x, y1:pos.y, x2:pos.x, y2:pos.y };
+    boardStrokes.push(newShape);
+    boardCurrentShape = newShape;
+    return;
+  }
 
   if (boardSelecting){
     if (boardCropMode && boardCropRect){
@@ -1552,13 +1650,27 @@ function boardPointerDown(e){
     }
     var hit = imageAt(pos);
     if (hit){
+      if (selectedStrokeId) selectedStrokeId = null;
       selectedImageId = hit.id;
       boardDragMode = "move";
-    } else {
+      updateBoardToolUI();
+      redrawBoard();
+      return;
+    }
+    var strokeHitObj = strokeAt(pos);
+    if (strokeHitObj){
       if (selectedImageId) commitPendingImageEdit();
       selectedImageId = null;
-      boardDragMode = null;
+      selectedStrokeId = strokeHitObj.id;
+      boardDragMode = "moveStroke";
+      updateBoardToolUI();
+      redrawBoard();
+      return;
     }
+    if (selectedImageId) commitPendingImageEdit();
+    selectedImageId = null;
+    selectedStrokeId = null;
+    boardDragMode = null;
     updateBoardToolUI();
     redrawBoard();
     return;
@@ -1576,11 +1688,22 @@ function boardPointerMove(e){
   e.preventDefault();
   var pos = getBoardPos(e);
 
+  if (boardCurrentShape){
+    boardCurrentShape.x2 = pos.x; boardCurrentShape.y2 = pos.y;
+    redrawBoard();
+    broadcastStrokeUpdate(boardCurrentShape);
+    boardLastPos = pos;
+    return;
+  }
+
   if (boardSelecting){
     var dx = pos.x - boardLastPos.x, dy = pos.y - boardLastPos.y;
     if (boardDragMode === "move"){
       var selM = getSelectedImage();
       if (selM){ selM.x += dx; selM.y += dy; redrawBoard(); }
+    } else if (boardDragMode === "moveStroke"){
+      var selStrokeM = getSelectedStroke();
+      if (selStrokeM){ translateStroke(selStrokeM, dx, dy); redrawBoard(); broadcastStrokeUpdate(selStrokeM); }
     } else if (boardDragMode === "resize" && boardDragOrig){
       var selR = getSelectedImage();
       if (selR){
@@ -1624,7 +1747,30 @@ function boardPointerUp(){
   if (!boardIsDrawing) return;
   boardIsDrawing = false;
   boardLastPos = null;
+  if (boardCurrentShape){
+    var newS = boardCurrentShape;
+    boardCurrentShape = null;
+    if (Math.hypot(newS.x2-newS.x1, newS.y2-newS.y1) < 6){
+      // 几乎没拖动，当成误触，不留下这个形状
+      var idx = boardStrokes.indexOf(newS);
+      if (idx>=0) boardStrokes.splice(idx,1);
+      redrawBoard();
+    } else {
+      broadcastStrokeUpdate(newS);
+      scheduleBoardSnapshot();
+      // 画完形状自动切到「选取」状态并选中它，方便老师立刻拖动调整位置
+      boardShapeTool = null;
+      clearShapeBtnActive();
+      boardSelecting = true;
+      selectedStrokeId = newS.id;
+      $("boardSelectBtn").classList.add("active");
+      updateBoardToolUI();
+      redrawBoard();
+    }
+    return;
+  }
   if (boardSelecting){
+    if (boardDragMode === "moveStroke") scheduleBoardSnapshot();
     boardDragMode = null;
     boardDragOrig = null;
     return;
@@ -1666,6 +1812,7 @@ function applyBoardRow(row){
     boardStrokes = [];
     boardImages = [];
     selectedImageId = null;
+    selectedStrokeId = null;
     boardCropMode = false; boardCropRect = null;
     boardStateLoaded = true;
     updateBoardToolUI();
@@ -1758,6 +1905,15 @@ function subscribeBoardRealtime(){
       for (var i=0;i<boardStrokes.length;i++){ if (boardStrokes[i].id===p.strokeId){ boardStrokes.splice(i,1); break; } }
       redrawBoard();
     })
+    .on("broadcast", { event:"strokeUpdate" }, function(msg){
+      var p = msg.payload;
+      if (!p) return;
+      var obj = { id:p.id, type:p.type, owner:p.owner, color:p.color, size:p.size, x1:p.x1, y1:p.y1, x2:p.x2, y2:p.y2, pts:p.pts };
+      var idx = -1;
+      for (var i=0;i<boardStrokes.length;i++){ if (boardStrokes[i].id===p.id){ idx=i; break; } }
+      if (idx>=0) boardStrokes[idx] = obj; else boardStrokes.push(obj);
+      redrawBoard();
+    })
     .subscribe();
   subscribeBoardPresence();
   if (!boardTableWatched){
@@ -1815,6 +1971,9 @@ function clearBoardCanvas(){
   boardStrokes = [];
   boardImages = [];
   selectedImageId = null;
+  selectedStrokeId = null;
+  boardShapeTool = null; boardCurrentShape = null;
+  clearShapeBtnActive();
   boardCropMode = false; boardCropRect = null;
   boardBgImage = null;
   boardVersion += 1;
@@ -1829,12 +1988,15 @@ function exitSelectTool(){
   boardSelecting = false;
   $("boardSelectBtn").classList.remove("active");
   if (selectedImageId) commitPendingImageEdit();
+  selectedStrokeId = null;
   updateBoardToolUI();
+  redrawBoard();
 }
 
 $("boardBtn").addEventListener("click", openBoard);
 $("boardCloseBtn").addEventListener("click", function(){
   if (selectedImageId) commitPendingImageEdit();
+  selectedStrokeId = null;
   $("boardOverlay").classList.remove("show");
 });
 $("boardClearBtn").addEventListener("click", clearBoardCanvas);
@@ -1856,12 +2018,38 @@ document.addEventListener("paste", function(e){
   }
 });
 $("boardSelectBtn").addEventListener("click", function(){
+  boardShapeTool = null; boardCurrentShape = null;
+  clearShapeBtnActive();
   boardSelecting = true;
   boardErasing = false;
   this.classList.add("active");
   $("boardEraser").classList.remove("active");
   document.querySelectorAll(".board-color").forEach(function(b){ b.classList.remove("active"); });
   updateBoardToolUI();
+});
+function setShapeTool(tool){
+  exitSelectTool();
+  boardErasing = false; $("boardEraser").classList.remove("active");
+  document.querySelectorAll(".board-color").forEach(function(b){ b.classList.remove("active"); });
+  boardShapeTool = tool;
+  clearShapeBtnActive();
+  var map = { line:"boardLineBtn", rect:"boardRectBtn", ellipse:"boardEllipseBtn" };
+  if (map[tool]) $(map[tool]).classList.add("active");
+}
+$("boardLineBtn").addEventListener("click", function(){ setShapeTool("line"); });
+$("boardRectBtn").addEventListener("click", function(){ setShapeTool("rect"); });
+$("boardEllipseBtn").addEventListener("click", function(){ setShapeTool("ellipse"); });
+$("boardDeleteStrokeBtn").addEventListener("click", function(){
+  var idx = -1;
+  for (var i=0;i<boardStrokes.length;i++){ if (boardStrokes[i].id===selectedStrokeId){ idx=i; break; } }
+  if (idx>=0){
+    broadcastBoardErase(boardStrokes[idx].id);
+    boardStrokes.splice(idx,1);
+  }
+  selectedStrokeId = null;
+  updateBoardToolUI();
+  redrawBoard();
+  scheduleBoardSnapshot();
 });
 $("boardCropBtn").addEventListener("click", function(){
   var sel = getSelectedImage();
@@ -1912,6 +2100,8 @@ $("boardDeleteImgBtn").addEventListener("click", function(){
 });
 $("boardEraser").addEventListener("click", function(){
   exitSelectTool();
+  boardShapeTool = null; boardCurrentShape = null;
+  clearShapeBtnActive();
   boardErasing = !boardErasing;
   this.classList.toggle("active", boardErasing);
   document.querySelectorAll(".board-color").forEach(function(b){ b.classList.remove("active"); });
@@ -1919,6 +2109,8 @@ $("boardEraser").addEventListener("click", function(){
 document.querySelectorAll(".board-color").forEach(function(b){
   b.addEventListener("click", function(){
     exitSelectTool();
+    boardShapeTool = null; boardCurrentShape = null;
+    clearShapeBtnActive();
     boardErasing = false;
     $("boardEraser").classList.remove("active");
     document.querySelectorAll(".board-color").forEach(function(x){ x.classList.remove("active"); });
