@@ -18,6 +18,7 @@
     sub_round int not null default 0,
     sub_question text not null default '',
     sub_started_at timestamptz,
+    sub_image text,
     updated_at timestamptz not null default now()
   );
   insert into live_board (id, version, allowed_client_ids)
@@ -25,12 +26,14 @@
     on conflict (id) do nothing;
 
   -- 如果之前已经建过 live_board 表（旧版本用的是 drawing_enabled 布尔栏位，
-  -- 或者还没有个人练习功能），只需要多跑这几行，把新栏位加上去就好，不用重建整张表：
+  -- 或者还没有个人练习功能、还没有「附上本页图片」功能），只需要多跑这几行，
+  -- 把新栏位加上去就好，不用重建整张表：
   -- alter table live_board add column if not exists allowed_client_ids jsonb not null default '[]'::jsonb;
   -- alter table live_board add column if not exists sub_active boolean not null default false;
   -- alter table live_board add column if not exists sub_round integer not null default 0;
   -- alter table live_board add column if not exists sub_question text not null default '';
   -- alter table live_board add column if not exists sub_started_at timestamptz;
+  -- alter table live_board add column if not exists sub_image text;
 
   alter table live_board enable row level security;
 
@@ -80,11 +83,14 @@
      即时画面。
   2. 各自练习模式：老师在「共享白板」面板写一句题目、按「发布题目并开始」
      后，被授权的学生画板上方会先出现老师布置的题目，然后各自拿到一块
-     「只有自己看得到」的空白画板，写完按「提交给老师」；老师那边会自动
+     「只有自己看得到」的画板，写完按「提交给老师」；老师那边会自动
      出现每个学生的画面（小图，标着名字），老师可以拖动、放大缩小来检查
      每个人的步骤，还能帮每份提交打 ✅/❌，自动算出交题最快又答对的前三名
      （排行榜）——这样即使一班很多人，大家
      也都有自己的画板可以参与，不用轮流等一块共享板。
+     如果老师发布题目时勾选了「同时把本页画面复制给每位学生当底图」，
+     学生拿到的就不是空白画板，而是先印着当下这一页画面（含图表）的
+     画板，可以直接在图表旁边或上面写答案，不用自己再看着投影抄一次。
 
   部署方式：把这个文件跟 index.html、y3-unit9-vote.html、
   y3-unit9-lesson-vercel.html 放在同一个 GitHub 仓库根目录下，一起推上
@@ -425,10 +431,9 @@
       if (subActive){
         if (subJustChanged){
           boardStrokes = [];
-          boardBgImage = null;
           currentStroke = null;
           submitted = false;
-          redrawBoard();
+          loadImage(row.sub_image || null); // 老师有勾选「附上本页图片」的话，这里会当底图印上去
           updateSubmitUI();
         }
         return;
