@@ -270,7 +270,14 @@
 </head>
 <body>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js" onerror="
+  // jsdelivr 有时会因为学校网络、广告拦截插件等原因连不上，
+  // 这里失败了就自动换一个 CDN 再试一次，两个都失败的话
+  // 「截图」相关的功能会在点击时提示改用「插入图片」代替，不影响其他功能。
+  var s=document.createElement('script');
+  s.src='https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+  document.head.appendChild(s);
+"></script>
 
 <div class="shell">
   <nav class="sidebar" id="sidebar"></nav>
@@ -2350,7 +2357,7 @@ function renderSubLeaderboard(){
 function captureSubImageIfWanted(){
   if (!$("boardSubImageToggle").checked) return Promise.resolve(null);
   return captureStageImage().catch(function(){
-    alert("本页画面截图失败，这一轮先不附图片，学生只会看到题目文字。");
+    alert("本页画面截图失败（可能是网络、学校防火墙，或浏览器的广告拦截／隐私保护插件把「网页截图」类的脚本挡住了），这一轮先不附图片，学生只会看到题目文字，不影响其他部分。");
     return null;
   });
 }
@@ -2405,23 +2412,41 @@ $("boardSubNewRoundBtn").addEventListener("click", function(){
   });
 });
 
+/* html2canvas 是从 CDN 载入的，学校网络、广告拦截或隐私保护类的浏览器
+   插件（会把「网页转canvas截图」这类脚本当成指纹追踪工具挡掉）都可能让它
+   一直载入不出来。这里先等一下（最多等 5 秒，每 300ms 检查一次）再判定
+   真的失败，避免「页面才刚打开、脚本还没跑完」就被误判成失败。 */
+function waitForHtml2Canvas(){
+  if (typeof html2canvas !== "undefined") return Promise.resolve();
+  return new Promise(function(resolve, reject){
+    var waited = 0, step = 300, limit = 5000;
+    var timer = setInterval(function(){
+      if (typeof html2canvas !== "undefined"){ clearInterval(timer); resolve(); return; }
+      waited += step;
+      if (waited >= limit){ clearInterval(timer); reject(new Error("html2canvas 一直载入不出来")); }
+    }, step);
+  });
+}
 function captureStageCanvas(){
-  if (typeof html2canvas === "undefined") return Promise.reject(new Error("html2canvas 还没加载好"));
-  var stageEl = document.getElementById("stage");
-  return html2canvas(stageEl, {
-    backgroundColor:"#ffffff",
-    scale:2,
-    ignoreElements: function(node){
-      // 白板本身的半透明弹窗背景跟统计图在屏幕上同一个位置，
-      // 截图时要跳过它（还有举手统计弹窗），不然截出来的背景会变成灰蒙蒙一片。
-      return node.id === "boardOverlay" || node.id === "pollOverlay";
-    }
+  return waitForHtml2Canvas().then(function(){
+    var stageEl = document.getElementById("stage");
+    return html2canvas(stageEl, {
+      backgroundColor:"#ffffff",
+      scale:2,
+      ignoreElements: function(node){
+        // 白板本身的半透明弹窗背景跟统计图在屏幕上同一个位置，
+        // 截图时要跳过它（还有举手统计弹窗），不然截出来的背景会变成灰蒙蒙一片。
+        return node.id === "boardOverlay" || node.id === "pollOverlay";
+      }
+    });
   });
 }
 function setBoardBackgroundFromStage(){
   captureStageCanvas().then(function(shot){
     placeNewImage(shot);
-  }).catch(function(){ alert("截图失败，请稍等几秒再试一次。"); });
+  }).catch(function(){
+    alert("截图工具载入失败，可能是网络、学校防火墙，或浏览器的广告拦截／隐私保护插件把「网页截图」类的脚本挡住了。\n\n可以试试：①换一个网络或关掉广告拦截插件后重新整理页面再试一次；②改用旁边的「🖼️ 插入图片」按钮，自己截图后当作图片上传，效果是一样的。");
+  });
 }
 /* 给「各自练习」的「附上本页图片」选项用：截同一张图，转成字符串（dataURL）
    才能存进 live_board 发给每个学生，学生那边用 <img> 载入，不会执行任何
