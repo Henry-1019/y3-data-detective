@@ -507,12 +507,9 @@ function makeNumberPad(container, correctValue, onDone){
 /* ---- 拖拽题：把卡片拖（或点选后再点目标）放进格子里，也可用来做排序题 ---- */
 function makeDragBlank(container, tokens, blanks, onDone){
   var wrap = el("div","dragblank-wrap");
-  try { // 给「举手统计」拿去生成选项用的，不影响外观
-    var tokenLabelById = {};
-    tokens.forEach(function(t){ tokenLabelById[t.id] = t.label; });
-    var correctLabels = blanks.map(function(b){ return tokenLabelById[b.correct] || "?"; });
-    wrap.dataset.dragCorrect = JSON.stringify(correctLabels);
-    wrap.dataset.dragTokens = JSON.stringify(tokens.map(function(t){ return t.label; }));
+  try { // 给「举手统计」拿去把同一题原样发给学生用的，不影响外观
+    wrap.dataset.dragTokensFull = JSON.stringify(tokens.map(function(t){ return {id:t.id, label:t.label}; }));
+    wrap.dataset.dragBlanksFull = JSON.stringify(blanks.map(function(b){ return {id:b.id, label:b.label||"", correct:b.correct}; }));
   } catch(e){}
   var blankRow = el("div","dragblank-slots");
   var slotEls = {};
@@ -1260,30 +1257,16 @@ function initPoll(){
   } catch(e){ /* Supabase unreachable — keep the button hidden, rest of the manual still works */ }
 }
 
-/* 拖拽题没有天然的「选项列表」，举手统计要给学生一组按钮选，
-   所以这里把「正确的完成结果」和几个随手打乱的「错误组合」拼成选项。 */
-function buildDragPollOptions(correctArr, poolArr){
-  var correctStr = correctArr.join(" · ");
-  var wrongs = []; var guard = 0;
-  while (wrongs.length < 2 && guard < 40){
-    guard++;
-    var combo = [];
-    for (var i=0;i<correctArr.length;i++) combo.push(poolArr[randInt(0,poolArr.length-1)]);
-    var str = combo.join(" · ");
-    if (str!==correctStr && wrongs.indexOf(str)<0) wrongs.push(str);
-  }
-  if (wrongs.length < 2 && correctArr.length>=2){
-    var swapped = correctArr.slice(); var tmp = swapped[0]; swapped[0]=swapped[1]; swapped[1]=tmp;
-    var s2 = swapped.join(" · ");
-    if (s2!==correctStr && wrongs.indexOf(s2)<0) wrongs.push(s2);
-  }
-  return { options: shuffle([correctStr].concat(wrongs)), correct: correctStr };
-}
-
+/* 举手统计现在支持三种题型，学生画面和作答方式都跟老师这边一模一样：
+   选择题/多选题维持原样；数字键盘题、拖拽题不再靠「生成几个选项给学生猜」，
+   而是把这一题的原始内容（数字键盘的正确答案 / 拖拽题的卡片和格子）整包
+   透过 live_poll.mode + live_poll.payload 发给学生，学生那边用一模一样的
+   组件重新画出同一题，作答后送回来的字符串也用同一种拼法，
+   这样对答案时才能对得上。 */
 function scrapeCurrentQuestion(){
   var qEls = document.querySelectorAll("#stage .display:not(.num)");
   var qText = qEls.length ? qEls[qEls.length-1].textContent : "";
-  if (!qText){ // 拖拽题一般没有 .display 提示句，退而求其次抓题目情境的 .instr 说明文字
+  if (!qText){ // 数字键盘、拖拽题一般没有 .display 提示句，退而求其次抓题目情境的 .instr 说明文字
     // （排除拖拽组件自带的通用操作提示「用手指把卡片拖到格子里」，那不是题目内容）
     var instrEls = document.querySelectorAll("#stage .instr:not(.drag-generic-hint)");
     if (instrEls.length) qText = instrEls[0].textContent;
@@ -1295,34 +1278,34 @@ function scrapeCurrentQuestion(){
     var opts = Array.prototype.map.call(optEls, function(b){ return b.textContent; });
     var correctEl = document.querySelector("#stage .choices .choice[data-correct='1']");
     var correctAnswer = correctEl ? correctEl.textContent : null;
-    return { question: qText, options: opts, correctAnswer: correctAnswer };
+    return { mode:"choice", question: qText, options: opts, correctAnswer: correctAnswer, payload: null };
   }
 
-  /* 数字键盘题：没有现成选项，自动生成几个接近的数字给学生选 */
+  /* 数字键盘题：学生那边也会看到同一个数字键盘 */
   var numEl = document.querySelector("#stage .numpad-wrap[data-correct-value]");
   if (numEl){
     var correctNum = Number(numEl.dataset.correctValue);
     if (!isNaN(correctNum)){
-      var spread = Math.max(3, Math.min(20, Math.round(Math.abs(correctNum)*0.12) || 3));
-      var opts2 = uniqueOptionsAround(correctNum, 4, 0, 99999, spread).map(String);
-      return { question: qText, options: opts2, correctAnswer: String(correctNum) };
+      return { mode:"numpad", question: qText, options: [], correctAnswer: String(correctNum), payload: null };
     }
   }
 
-  /* 拖拽题：把正确组合和几个打乱的错误组合当选项 */
-  var dragEl = document.querySelector("#stage .dragblank-wrap[data-drag-correct]");
+  /* 拖拽题：把卡片（tokens）和格子（blanks）整包发给学生，重画同一题 */
+  var dragEl = document.querySelector("#stage .dragblank-wrap[data-drag-blanks-full]");
   if (dragEl){
     try {
-      var correctArr = JSON.parse(dragEl.dataset.dragCorrect || "[]");
-      var poolArr = JSON.parse(dragEl.dataset.dragTokens || "[]");
-      if (correctArr.length && poolArr.length){
-        var built = buildDragPollOptions(correctArr, poolArr);
-        return { question: qText, options: built.options, correctAnswer: built.correct };
+      var tokensFull = JSON.parse(dragEl.dataset.dragTokensFull || "[]");
+      var blanksFull = JSON.parse(dragEl.dataset.dragBlanksFull || "[]");
+      if (tokensFull.length && blanksFull.length){
+        var tokLabelById = {};
+        tokensFull.forEach(function(t){ tokLabelById[t.id] = t.label; });
+        var correctStr = blanksFull.map(function(b){ return tokLabelById[b.correct] || "?"; }).join("|");
+        return { mode:"drag", question: qText, options: [], correctAnswer: correctStr, payload: { tokens: tokensFull, blanks: blanksFull } };
       }
     } catch(e){}
   }
 
-  return { question: qText, options: [], correctAnswer: null };
+  return { mode:"none", question: qText, options: [], correctAnswer: null, payload: null };
 }
 
 function openPollPanel(){
@@ -1330,12 +1313,13 @@ function openPollPanel(){
   var scraped = scrapeCurrentQuestion();
   var body = $("pollBody");
   clearEl(body);
-  if (!scraped.options.length){
+  if (scraped.mode === "none"){
     body.appendChild(el("div","poll-empty","侦测不到这一页的题目内容，请切换到练习题页面（选择题/多选题/数字键盘/拖拽题都支持）再试一次。"));
     return;
   }
+  var modeLabel = {choice:"选择题", numpad:"数字键盘题", drag:"拖拽题"}[scraped.mode] || "";
   body.appendChild(el("div","poll-q", scraped.question || "（本题）"));
-  body.appendChild(el("div","poll-total","学生打开「举手统计」网址后会看到这一题，点选后老师这边会实时看到统计结果。"));
+  body.appendChild(el("div","poll-total","学生打开「举手统计」网址后会看到跟这里一模一样的" + modeLabel + "，作答方式也一样，老师这边会实时看到统计结果。"));
   var sendBtn = el("button","poll-send","🚀 发送给学生作答"); sendBtn.type="button";
   sendBtn.addEventListener("click", function(){ sendPoll(scraped); });
   var actionRow = el("div","poll-actions"); actionRow.appendChild(sendBtn);
@@ -1350,22 +1334,45 @@ function sendPoll(scraped){
   var body = $("pollBody");
   clearEl(body);
   body.appendChild(el("div","poll-q", scraped.question || "（本题）"));
-  var tally = {}; scraped.options.forEach(function(o){ tally[o]=0; });
+
+  /* 选择题：按每个选项分别统计票数（原本的长条图）。
+     数字键盘题、拖拽题：没有固定的几个选项可以分别统计，改成「答对/答错」
+     两条长条，一样能看出班上答题状况，排行榜的算法完全不变。 */
+  var isChoiceMode = scraped.mode === "choice";
+  var tally = {}; // 只有选择题模式会用到：{选项文字: 票数}
   var rowEls = {};
+  var binaryEls = null; // 只有数字键盘/拖拽模式会用到
   var barsWrap = el("div","poll-opts");
-  scraped.options.forEach(function(o){
-    var row = el("div","poll-opt-row");
-    var isCorrect = scraped.correctAnswer != null && o === scraped.correctAnswer;
-    row.appendChild(el("div","poll-opt-label", o + (isCorrect ? " ✓" : "")));
-    var track = el("div","poll-bar-track");
-    var fill = el("div","poll-bar-fill",""); fill.style.width="0%";
-    track.appendChild(fill);
-    row.appendChild(track);
-    var count = el("div","poll-count","0");
-    row.appendChild(count);
-    rowEls[o] = {fill:fill, count:count};
-    barsWrap.appendChild(row);
-  });
+  if (isChoiceMode){
+    scraped.options.forEach(function(o){ tally[o]=0; });
+    scraped.options.forEach(function(o){
+      var row = el("div","poll-opt-row");
+      var isCorrect = scraped.correctAnswer != null && o === scraped.correctAnswer;
+      row.appendChild(el("div","poll-opt-label", o + (isCorrect ? " ✓" : "")));
+      var track = el("div","poll-bar-track");
+      var fill = el("div","poll-bar-fill",""); fill.style.width="0%";
+      track.appendChild(fill);
+      row.appendChild(track);
+      var count = el("div","poll-count","0");
+      row.appendChild(count);
+      rowEls[o] = {fill:fill, count:count};
+      barsWrap.appendChild(row);
+    });
+  } else {
+    function binaryRow(label, color){
+      var row = el("div","poll-opt-row");
+      row.appendChild(el("div","poll-opt-label", label));
+      var track = el("div","poll-bar-track");
+      var fill = el("div","poll-bar-fill",""); fill.style.width="0%"; fill.style.background = color;
+      track.appendChild(fill);
+      row.appendChild(track);
+      var count = el("div","poll-count","0");
+      row.appendChild(count);
+      barsWrap.appendChild(row);
+      return {fill:fill, count:count, n:0};
+    }
+    binaryEls = { ok: binaryRow("✅ 答对", "var(--secondary)"), no: binaryRow("❌ 答错", "var(--wrong)") };
+  }
   body.appendChild(barsWrap);
   var totalEl = el("div","poll-total","正在发送给学生…");
   body.appendChild(totalEl);
@@ -1379,13 +1386,22 @@ function sendPoll(scraped){
   var leaderboard = []; // [{name, ms}], 只放答对的人，按用时从快到慢排
 
   function renderTally(){
-    var total = 0; Object.keys(tally).forEach(function(k){ total += tally[k]; });
-    var max = 1; Object.keys(tally).forEach(function(k){ if (tally[k]>max) max=tally[k]; });
-    Object.keys(tally).forEach(function(o){
-      var pct = Math.round(tally[o]/max*100);
-      if (rowEls[o]){ rowEls[o].fill.style.width = pct+"%"; rowEls[o].count.textContent = String(tally[o]); }
-    });
-    totalEl.textContent = "已提交："+total+" 人";
+    if (isChoiceMode){
+      var total = 0; Object.keys(tally).forEach(function(k){ total += tally[k]; });
+      var max = 1; Object.keys(tally).forEach(function(k){ if (tally[k]>max) max=tally[k]; });
+      Object.keys(tally).forEach(function(o){
+        var pct = Math.round(tally[o]/max*100);
+        if (rowEls[o]){ rowEls[o].fill.style.width = pct+"%"; rowEls[o].count.textContent = String(tally[o]); }
+      });
+      totalEl.textContent = "已提交："+total+" 人";
+    } else {
+      var max2 = Math.max(binaryEls.ok.n, binaryEls.no.n, 1);
+      binaryEls.ok.fill.style.width = Math.round(binaryEls.ok.n/max2*100)+"%";
+      binaryEls.ok.count.textContent = String(binaryEls.ok.n);
+      binaryEls.no.fill.style.width = Math.round(binaryEls.no.n/max2*100)+"%";
+      binaryEls.no.count.textContent = String(binaryEls.no.n);
+      totalEl.textContent = "已提交："+(binaryEls.ok.n+binaryEls.no.n)+" 人";
+    }
   }
   function renderLeaderboard(){
     clearEl(lbWrap);
@@ -1402,7 +1418,11 @@ function sendPoll(scraped){
     });
   }
 
-  pollClient.from("live_poll").upsert({ id:"current", version:thisVersion, question:scraped.question, options:scraped.options, correct_option:scraped.correctAnswer, updated_at:new Date().toISOString() }).then(function(res){
+  pollClient.from("live_poll").upsert({
+    id:"current", version:thisVersion, question:scraped.question, options:scraped.options,
+    correct_option:scraped.correctAnswer, mode:scraped.mode, payload:scraped.payload,
+    updated_at:new Date().toISOString()
+  }).then(function(res){
     if (res.error){ totalEl.textContent = "发送失败："+res.error.message; return; }
     if (pollChannel){ pollClient.removeChannel(pollChannel); }
     renderTally();
@@ -1412,8 +1432,14 @@ function sendPoll(scraped){
         var row = payload.new;
         if (!row) return;
         var choice = row.choice;
-        if (choice && tally.hasOwnProperty(choice)){ tally[choice] += 1; renderTally(); }
-        if (scraped.correctAnswer != null && choice === scraped.correctAnswer){
+        var isCorrect = scraped.correctAnswer != null && choice === scraped.correctAnswer;
+        if (isChoiceMode){
+          if (choice && tally.hasOwnProperty(choice)){ tally[choice] += 1; }
+        } else {
+          if (isCorrect) binaryEls.ok.n += 1; else binaryEls.no.n += 1;
+        }
+        renderTally();
+        if (isCorrect){
           leaderboard.push({ name: row.name || "同学", ms: Date.now()-pollStartedAt });
           leaderboard.sort(function(a,b){ return a.ms-b.ms; });
           renderLeaderboard();
