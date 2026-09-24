@@ -368,11 +368,22 @@
       <div class="board-roster-head" style="margin-top:14px;">
         <div class="board-roster-title">🧑‍🎓🧑‍🎓 各自练习模式</div>
       </div>
+      <textarea id="boardSubQuestionInput" class="board-sub-question-input" rows="2" placeholder="给这一轮练习写一句题目，例如「请写出 25 + 48 的计算过程」……"></textarea>
       <div class="board-roster-actions" style="margin-bottom:6px;">
-        <button class="board-mini-btn" id="boardSubToggleBtn" type="button">▶️ 开始各自练习</button>
-        <button class="board-mini-btn" id="boardSubNewRoundBtn" type="button" hidden>🔄 清空重新开始</button>
+        <button class="board-mini-btn" id="boardSubToggleBtn" type="button">▶️ 发布题目并开始</button>
+        <button class="board-mini-btn" id="boardSubNewRoundBtn" type="button" hidden>🔄 换一题重新开始</button>
       </div>
-      <div class="board-roster-hint">☝️ 开启后，被授权的学生会各自拿到一块只有自己看得到的空白画板，写完按「提交」，画面会自动出现在这块画板上（标着名字），可以拖动、放大缩小来一个个检查步骤——这样一班多人也都有自己的画板可以写，不用轮流等。</div>
+      <div class="board-roster-hint">☝️ 开启后，被授权的学生会各自拿到一块只有自己看得到的空白画板（上面会显示你写的题目），写完按「提交」，画面会自动出现在这块画板上（标着名字），可以拖动、放大缩小来一个个检查步骤——这样一班多人也都有自己的画板可以写，不用轮流等。</div>
+      <div id="boardSubLbBlock" hidden style="margin-top:10px;">
+        <div class="board-roster-title" style="font-size:12.5px;">🏆 最快答对（前 3 名）</div>
+        <div class="board-roster-list" id="boardSubLeaderboard" style="margin-top:6px;"></div>
+      </div>
+      <div style="margin-top:10px;">
+        <div class="board-roster-title" style="font-size:12.5px;">📥 提交名单（点 ✅/❌ 帮学生打分，用来算排行榜）</div>
+        <div class="board-roster-list" id="boardSubSubmissionList" style="margin-top:6px;">
+          <div class="board-roster-empty">还没有人提交……</div>
+        </div>
+      </div>
     </div>
     <div class="board-footer">
       <button class="poll-close" id="boardCloseBtn" type="button">关闭</button>
@@ -396,6 +407,7 @@ function makeChoiceRow(container, options, correctValue, onDone, cls){
   var row = el("div","choices"); var answered=false;
   options.forEach(function(v){
     var b = el("button", cls || "choice", String(v)); b.type="button";
+    b.dataset.correct = (v===correctValue) ? "1" : "0"; // 给「举手统计」拿去判断哪个是正确答案用的，不影响外观
     b.addEventListener("click", function(){
       if (answered) return; answered=true;
       row.querySelectorAll(".choice").forEach(function(x){ x.disabled=true; });
@@ -1245,7 +1257,9 @@ function scrapeCurrentQuestion(){
   var qText = qEls.length ? qEls[qEls.length-1].textContent : "";
   var optEls = document.querySelectorAll("#stage .choices .choice");
   var opts = Array.prototype.map.call(optEls, function(b){ return b.textContent; });
-  return { question: qText, options: opts };
+  var correctEl = document.querySelector("#stage .choices .choice[data-correct='1']");
+  var correctAnswer = correctEl ? correctEl.textContent : null;
+  return { question: qText, options: opts, correctAnswer: correctAnswer };
 }
 
 function openPollPanel(){
@@ -1269,6 +1283,7 @@ function sendPoll(scraped){
   if (!pollClient) return;
   pollVersion += 1;
   var thisVersion = pollVersion;
+  var pollStartedAt = Date.now(); // 用来算「谁最快答对」，够班上课堂用，不追求到毫秒级精准
   var body = $("pollBody");
   clearEl(body);
   body.appendChild(el("div","poll-q", scraped.question || "（本题）"));
@@ -1277,7 +1292,8 @@ function sendPoll(scraped){
   var barsWrap = el("div","poll-opts");
   scraped.options.forEach(function(o){
     var row = el("div","poll-opt-row");
-    row.appendChild(el("div","poll-opt-label", o));
+    var isCorrect = scraped.correctAnswer != null && o === scraped.correctAnswer;
+    row.appendChild(el("div","poll-opt-label", o + (isCorrect ? " ✓" : "")));
     var track = el("div","poll-bar-track");
     var fill = el("div","poll-bar-fill",""); fill.style.width="0%";
     track.appendChild(fill);
@@ -1291,6 +1307,14 @@ function sendPoll(scraped){
   var totalEl = el("div","poll-total","正在发送给学生…");
   body.appendChild(totalEl);
 
+  var lbTitle = el("div","poll-total","🏆 最快答对（前 3 名）");
+  var lbWrap = el("div","poll-leaderboard");
+  lbTitle.hidden = scraped.correctAnswer == null;
+  lbWrap.hidden = scraped.correctAnswer == null;
+  body.appendChild(lbTitle);
+  body.appendChild(lbWrap);
+  var leaderboard = []; // [{name, ms}], 只放答对的人，按用时从快到慢排
+
   function renderTally(){
     var total = 0; Object.keys(tally).forEach(function(k){ total += tally[k]; });
     var max = 1; Object.keys(tally).forEach(function(k){ if (tally[k]>max) max=tally[k]; });
@@ -1300,15 +1324,37 @@ function sendPoll(scraped){
     });
     totalEl.textContent = "已提交："+total+" 人";
   }
+  function renderLeaderboard(){
+    clearEl(lbWrap);
+    if (!leaderboard.length){
+      lbWrap.appendChild(el("div","poll-empty","还没有人答对～"));
+      return;
+    }
+    leaderboard.slice(0,3).forEach(function(entry, i){
+      var row = el("div","poll-lb-row");
+      row.appendChild(el("div","poll-lb-medal", ["🥇","🥈","🥉"][i] || ""));
+      row.appendChild(el("div","poll-lb-name", entry.name || "同学"));
+      row.appendChild(el("div","poll-lb-time", (entry.ms/1000).toFixed(1)+" 秒"));
+      lbWrap.appendChild(row);
+    });
+  }
 
-  pollClient.from("live_poll").upsert({ id:"current", version:thisVersion, question:scraped.question, options:scraped.options, updated_at:new Date().toISOString() }).then(function(res){
+  pollClient.from("live_poll").upsert({ id:"current", version:thisVersion, question:scraped.question, options:scraped.options, correct_option:scraped.correctAnswer, updated_at:new Date().toISOString() }).then(function(res){
     if (res.error){ totalEl.textContent = "发送失败："+res.error.message; return; }
     if (pollChannel){ pollClient.removeChannel(pollChannel); }
     renderTally();
+    if (scraped.correctAnswer != null) renderLeaderboard();
     pollChannel = pollClient.channel("live-votes-"+thisVersion)
       .on("postgres_changes", { event:"INSERT", schema:"public", table:"live_votes", filter:"version=eq."+thisVersion }, function(payload){
-        var choice = payload.new && payload.new.choice;
+        var row = payload.new;
+        if (!row) return;
+        var choice = row.choice;
         if (choice && tally.hasOwnProperty(choice)){ tally[choice] += 1; renderTally(); }
+        if (scraped.correctAnswer != null && choice === scraped.correctAnswer){
+          leaderboard.push({ name: row.name || "同学", ms: Date.now()-pollStartedAt });
+          leaderboard.sort(function(a,b){ return a.ms-b.ms; });
+          renderLeaderboard();
+        }
       })
       .subscribe();
   }).catch(function(){ totalEl.textContent = "发送失败，请检查网络。"; });
@@ -1361,12 +1407,16 @@ var boardShapeSeq = 0;
 var selectedStrokeId = null;
 
 /* 「各自练习」模式：老师开启后，被授权的学生会各自拿到一块只有自己看得到的
-   空白画板，写完提交，画面会以 board_submissions 表实时同步过来，老师这边
-   自动把它放上画板（当成一张可以移动/缩放的图片），方便一次检查全班做法。 */
+   空白画板（上面显示老师布置的题目），写完提交，画面会以 board_submissions 表
+   实时同步过来，老师这边自动把它放上画板（当成一张可以移动/缩放的图片），
+   方便一次检查全班做法。老师可以帮每份提交打 ✅/❌，用交题快慢排出排行榜。 */
 var boardSubActive = false;
 var boardSubRound = 0;
+var boardSubQuestion = "";
+var boardSubStartedAt = 0; // 本地时间戳（毫秒），用来算「谁最快交」
 var boardSubChannel = null;
 var boardSubPlacedCount = 0;
+var boardSubEntries = {}; // client_id -> {name, ms, grade: null|"correct"|"wrong"}
 
 function initBoardButton(){
   $("boardBtn").hidden = false;
@@ -1835,12 +1885,20 @@ function loadBoardImage(dataUrl, cb){
 function applyBoardRow(row){
   boardAllowedIds = Array.isArray(row.allowed_client_ids) ? row.allowed_client_ids : [];
   renderBoardRoster();
-  var wasSubActive = boardSubActive;
+  var wasSubActive = boardSubActive, wasSubRound = boardSubRound;
   boardSubRound = row.sub_round || 0;
   boardSubActive = !!row.sub_active;
-  $("boardSubToggleBtn").textContent = boardSubActive ? "⏹️ 结束各自练习" : "▶️ 开始各自练习";
+  boardSubQuestion = row.sub_question || "";
+  if (!wasSubActive && boardSubActive) $("boardSubQuestionInput").value = boardSubQuestion;
+  $("boardSubToggleBtn").textContent = boardSubActive ? "⏹️ 结束各自练习" : "▶️ 发布题目并开始";
   $("boardSubNewRoundBtn").hidden = !boardSubActive;
-  if (boardSubActive && !wasSubActive) subscribeSubmissions();
+  if (boardSubActive && (!wasSubActive || wasSubRound !== boardSubRound)){
+    boardSubStartedAt = row.sub_started_at ? new Date(row.sub_started_at).getTime() : Date.now();
+    boardSubEntries = {};
+    renderSubList();
+    renderSubLeaderboard();
+    subscribeSubmissions();
+  }
   var v = row.version || 0;
   if (!boardStateLoaded || v !== boardVersion){
     boardVersion = v;
@@ -1973,11 +2031,14 @@ function openBoard(){
   });
 }
 
-function persistSubState(active, round){
+function persistSubState(active, round, question, startedAt){
   if (!pollClient) return;
-  pollClient.from("live_board").upsert({ id:"current", sub_active:active, sub_round:round, updated_at:new Date().toISOString() }).then(function(res){
+  var payload = { id:"current", sub_active:active, sub_round:round, updated_at:new Date().toISOString() };
+  if (question !== undefined) payload.sub_question = question;
+  if (startedAt !== undefined) payload.sub_started_at = new Date(startedAt).toISOString();
+  pollClient.from("live_board").upsert(payload).then(function(res){
     if (res.error){
-      alert("❌ 没有保存成功：" + res.error.message + "\n\n很可能是 Supabase 的 live_board 表还没加 sub_active / sub_round 字段，也可能是 board_submissions 表还没建，请到 Supabase 的 SQL Editor 跑一次学生画板页面开头注释里的建表 SQL。");
+      alert("❌ 没有保存成功：" + res.error.message + "\n\n很可能是 Supabase 的 live_board 表还没加 sub_active / sub_round / sub_question / sub_started_at 字段，也可能是 board_submissions 表还没建，请到 Supabase 的 SQL Editor 跑一次学生画板页面开头注释里的建表 SQL。");
     }
   });
 }
@@ -2015,8 +2076,14 @@ function placeSubmissionImage(imgEl, name, clientId){
 }
 
 function loadSubmissionRow(row){
+  var clientId = row.client_id;
+  var ms = Math.max(0, new Date(row.updated_at).getTime() - boardSubStartedAt);
+  var prevGrade = boardSubEntries[clientId] ? boardSubEntries[clientId].grade : null;
+  boardSubEntries[clientId] = { name: row.name, ms: ms, grade: prevGrade };
+  renderSubList();
+  renderSubLeaderboard();
   var img = new Image();
-  img.onload = function(){ placeSubmissionImage(img, row.name, row.client_id); };
+  img.onload = function(){ placeSubmissionImage(img, row.name, clientId); };
   img.src = row.snapshot;
 }
 
@@ -2035,32 +2102,89 @@ function subscribeSubmissions(){
   });
 }
 
+function gradeSubmission(clientId, grade){
+  if (!boardSubEntries[clientId]) return;
+  boardSubEntries[clientId].grade = (boardSubEntries[clientId].grade === grade) ? null : grade;
+  renderSubList();
+  renderSubLeaderboard();
+}
+
+function renderSubList(){
+  var list = $("boardSubSubmissionList");
+  clearEl(list);
+  var ids = Object.keys(boardSubEntries);
+  if (!ids.length){
+    list.appendChild(el("div","board-roster-empty","还没有人提交……"));
+    return;
+  }
+  ids.sort(function(a,b){ return boardSubEntries[a].ms - boardSubEntries[b].ms; }).forEach(function(cid){
+    var entry = boardSubEntries[cid];
+    var row = el("div","board-sub-item");
+    row.appendChild(el("div","name", entry.name || "同学"));
+    row.appendChild(el("div","elapsed", (entry.ms/1000).toFixed(1)+" 秒"));
+    var okBtn = el("button","grade-btn"+(entry.grade==="correct"?" on-correct":""),"✅"); okBtn.type="button";
+    okBtn.addEventListener("click", function(){ gradeSubmission(cid,"correct"); });
+    var noBtn = el("button","grade-btn"+(entry.grade==="wrong"?" on-wrong":""),"❌"); noBtn.type="button";
+    noBtn.addEventListener("click", function(){ gradeSubmission(cid,"wrong"); });
+    row.appendChild(okBtn); row.appendChild(noBtn);
+    list.appendChild(row);
+  });
+}
+
+function renderSubLeaderboard(){
+  var block = $("boardSubLbBlock");
+  var wrap = $("boardSubLeaderboard");
+  var correctIds = Object.keys(boardSubEntries).filter(function(cid){ return boardSubEntries[cid].grade === "correct"; });
+  block.hidden = !correctIds.length;
+  clearEl(wrap);
+  if (!correctIds.length) return;
+  correctIds.sort(function(a,b){ return boardSubEntries[a].ms - boardSubEntries[b].ms; });
+  correctIds.slice(0,3).forEach(function(cid, i){
+    var entry = boardSubEntries[cid];
+    var row = el("div","board-sub-lb-row");
+    row.appendChild(el("div","medal", ["🥇","🥈","🥉"][i] || ""));
+    row.appendChild(el("div","name", entry.name || "同学"));
+    row.appendChild(el("div","time", (entry.ms/1000).toFixed(1)+" 秒"));
+    wrap.appendChild(row);
+  });
+}
+
 $("boardSubToggleBtn").addEventListener("click", function(){
   if (!boardSubActive){
+    var q = $("boardSubQuestionInput").value.trim();
     boardSubRound += 1;
     boardSubActive = true;
+    boardSubQuestion = q;
+    boardSubStartedAt = Date.now();
+    boardSubEntries = {};
     boardSubPlacedCount = 0;
     boardImages = boardImages.filter(function(o){ return !o.subClientId; });
     $("boardSubToggleBtn").textContent = "⏹️ 结束各自练习";
     $("boardSubNewRoundBtn").hidden = false;
-    persistSubState(true, boardSubRound);
+    renderSubList(); renderSubLeaderboard();
+    persistSubState(true, boardSubRound, q, boardSubStartedAt);
     subscribeSubmissions();
     redrawBoard();
   } else {
     boardSubActive = false;
-    $("boardSubToggleBtn").textContent = "▶️ 开始各自练习";
+    $("boardSubToggleBtn").textContent = "▶️ 发布题目并开始";
     $("boardSubNewRoundBtn").hidden = true;
     persistSubState(false, boardSubRound);
   }
 });
 $("boardSubNewRoundBtn").addEventListener("click", function(){
+  var q = $("boardSubQuestionInput").value.trim();
   boardSubRound += 1;
+  boardSubQuestion = q;
+  boardSubStartedAt = Date.now();
+  boardSubEntries = {};
   boardSubPlacedCount = 0;
   boardImages = boardImages.filter(function(o){ return !o.subClientId; });
   if (selectedImageId && !getSelectedImage()) selectedImageId = null;
   updateBoardToolUI();
+  renderSubList(); renderSubLeaderboard();
   redrawBoard();
-  persistSubState(true, boardSubRound);
+  persistSubState(true, boardSubRound, q, boardSubStartedAt);
 });
 
 function setBoardBackgroundFromStage(){
@@ -2260,5 +2384,4 @@ render();
 
 })();
 </script>
-
 </body></html>
