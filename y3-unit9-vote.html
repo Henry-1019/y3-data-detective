@@ -71,8 +71,10 @@
   这一页现在支持三种题型，学生看到的画面和作答方式都跟老师端一模一样：
   选择题/多选题（按按钮选答案）、数字键盘题（按数字键盘打字作答）、
   拖拽题（点卡片、再点格子放上去，跟老师端一样）。老师端会用 mode 栏位
-  告诉这个页面要显示哪一种，payload 栏位（拖拽题用）带着这一题的卡片和
-  格子内容，让学生这边能生成一模一样的题目。
+  告诉这个页面要显示哪一种，payload 栏位带着这一题需要的额外内容：
+  拖拽题的卡片和格子（tokens/blanks），还有题目旁边的统计图数据
+  （chart：长条图/饼分图/记数统计表，拆成数字文字传过来，不是传图片），
+  让学生这边能生成一模一样的题目和图表，照着图表回答。
 
   部署方式：把这个文件跟 index.html 放在同一个 GitHub 仓库根目录下，
   一起推上 Vercel，网址就会是 你的网址.vercel.app/y3-unit9-vote.html，
@@ -84,6 +86,7 @@
     --bg:#FFF6E9; --bg-soft:#FFEFD6; --panel:#FFFFFF; --ink:#2B2A33; --ink-soft:#6B6879; --line:#EFE2CC;
     --primary:#FF6B4A; --primary-ink:#7A2A18; --secondary:#2EC4B6; --secondary-ink:#0B4A45; --wrong:#E63950;
     --wrong-bg:#FFE3E7; --correct-bg:#DFF7EE; --shadow:0 10px 24px -12px rgba(43,42,51,.28);
+    --c1:#FF6B4A; --c2:#2EC4B6; --c3:#FFC93C; --c4:#7B7FE8; --c5:#F76BA8;
   }
   *{ box-sizing:border-box; }
   html,body{ margin:0; padding:0; }
@@ -140,6 +143,24 @@
   .drag-hint{ font-size:12px; color:var(--ink-soft); margin:-6px 0 0; }
   .drag-submit{ font:inherit; font-weight:800; font-size:15px; background:var(--primary); color:#fff; border:none; border-radius:14px; padding:12px 22px; cursor:pointer; margin-top:4px; }
   .drag-submit[disabled]{ opacity:.5; cursor:default; }
+
+  /* 题目的统计图：跟老师端长得一样，方便学生对照作答 */
+  .qchart{ margin:2px 0 16px; }
+  .bar-chart{ display:flex; align-items:flex-end; gap:12px; height:140px; padding:0 6px; justify-content:center; }
+  .bar-col{ display:flex; flex-direction:column; align-items:center; gap:5px; justify-content:flex-end; height:100%; }
+  .bar-rect{ width:28px; border-radius:8px 8px 0 0; }
+  .bar-rect.missing{ background:repeating-linear-gradient(45deg, var(--line), var(--line) 6px, transparent 6px, transparent 12px) !important; border:2px dashed var(--ink-soft); }
+  .bar-label{ font-size:11px; font-weight:700; color:var(--ink-soft); }
+  .pie-wrap{ display:flex; gap:16px; align-items:center; flex-wrap:wrap; justify-content:center; }
+  .pie{ width:130px; height:130px; border-radius:50%; flex:none; }
+  .pie-legend{ display:flex; flex-direction:column; gap:6px; text-align:left; font-size:12.5px; }
+  .pie-legend .row{ display:flex; align-items:center; gap:8px; }
+  .pie-swatch{ width:13px; height:13px; border-radius:4px; flex:none; }
+  .freq-table{ display:flex; flex-direction:column; gap:6px; width:100%; }
+  .freq-row{ display:grid; grid-template-columns:60px 1fr 34px; align-items:center; gap:8px; border-bottom:1px dashed var(--line); padding-bottom:6px; }
+  .freq-label{ font-weight:800; font-size:12.5px; text-align:right; }
+  .freq-checks{ display:flex; flex-wrap:wrap; gap:3px; font-size:13px; color:var(--secondary-ink); }
+  .freq-count{ font-weight:800; text-align:center; font-size:12.5px; }
 </style>
 </head>
 <body>
@@ -376,9 +397,64 @@
       app.appendChild(status);
     }
 
+    /* 把老师那边拆出来的图表数据重新画成一模一样的统计图，
+       方便学生对照图表作答（不是传图片，是传数据，比截图清楚也比较安全）。 */
+    function renderChart(container, chart){
+      if (!chart) return;
+      if (chart.type === "bar"){
+        var bwrap = el("div", "bar-chart");
+        (chart.cols || []).forEach(function(c){
+          var col = el("div", "bar-col");
+          var val = el("div", "bar-label num", c.value);
+          var rect = el("div", "bar-rect" + (c.missing ? " missing" : ""));
+          rect.style.height = c.height || "60px";
+          if (!c.missing) rect.style.background = c.color;
+          col.appendChild(val); col.appendChild(rect); col.appendChild(el("div", "bar-label", c.label));
+          bwrap.appendChild(col);
+        });
+        container.appendChild(bwrap);
+      } else if (chart.type === "pie"){
+        var pwrap = el("div", "pie-wrap");
+        var pie = el("div", "pie"); pie.style.background = chart.background || "";
+        var legend = el("div", "pie-legend");
+        (chart.legend || []).forEach(function(item){
+          var row = el("div", "row");
+          var sw = el("div", "pie-swatch"); sw.style.background = item.color || "";
+          row.appendChild(sw); row.appendChild(el("span", "", item.text || ""));
+          legend.appendChild(row);
+        });
+        pwrap.appendChild(pie); pwrap.appendChild(legend);
+        container.appendChild(pwrap);
+      } else if (chart.type === "freq"){
+        var fwrap = el("div", "freq-table");
+        var head = el("div", "freq-row");
+        head.appendChild(el("div", "freq-label", "食物"));
+        head.appendChild(el("div", "", "记录"));
+        head.appendChild(el("div", "freq-count", "人数"));
+        head.style.borderBottom = "2px solid var(--line)";
+        fwrap.appendChild(head);
+        (chart.rows || []).forEach(function(r){
+          var row = el("div", "freq-row");
+          row.appendChild(el("div", "freq-label", r.label));
+          var checks = el("div", "freq-checks");
+          for (var i=0;i<(r.checkCount||0);i++) checks.appendChild(el("span", "", "✓"));
+          row.appendChild(checks);
+          row.appendChild(el("div", "freq-count num", r.count));
+          fwrap.appendChild(row);
+        });
+        container.appendChild(fwrap);
+      }
+    }
+
     function renderQuestion(poll){
       clearEl(app);
       app.appendChild(el("div", "qtext", poll.question || "（本题）"));
+      var chart = poll.payload && poll.payload.chart;
+      if (chart){
+        var chartBox = el("div", "qchart");
+        renderChart(chartBox, chart);
+        app.appendChild(chartBox);
+      }
       var alreadyVoted = false;
       try { alreadyVoted = !!localStorage.getItem(votedKey(poll.version)); } catch (e) {}
       var mode = poll.mode || "choice";
