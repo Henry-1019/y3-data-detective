@@ -205,16 +205,27 @@
         }
       }
       boardStrokes.forEach(function(s){
-        if (!s.pts || !s.pts.length) return;
         ctx.save();
         ctx.lineCap = "round"; ctx.lineJoin = "round";
         ctx.globalCompositeOperation = "source-over";
         ctx.strokeStyle = s.color; ctx.lineWidth = s.size;
-        if (s.pts.length === 1){
+        if (s.type === "line"){
+          ctx.beginPath();
+          ctx.moveTo(s.x1, s.y1); ctx.lineTo(s.x2, s.y2);
+          ctx.stroke();
+        } else if (s.type === "rect"){
+          var rx = Math.min(s.x1,s.x2), ry = Math.min(s.y1,s.y2), rw = Math.abs(s.x2-s.x1), rh = Math.abs(s.y2-s.y1);
+          ctx.strokeRect(rx, ry, rw, rh);
+        } else if (s.type === "ellipse"){
+          var ecx = (s.x1+s.x2)/2, ecy = (s.y1+s.y2)/2, erx = Math.abs(s.x2-s.x1)/2, ery = Math.abs(s.y2-s.y1)/2;
+          ctx.beginPath();
+          ctx.ellipse(ecx, ecy, Math.max(erx,0.01), Math.max(ery,0.01), 0, 0, Math.PI*2);
+          ctx.stroke();
+        } else if (s.pts && s.pts.length === 1){
           ctx.beginPath();
           ctx.arc(s.pts[0].x, s.pts[0].y, s.size/2, 0, Math.PI*2);
           ctx.fillStyle = s.color; ctx.fill();
-        } else {
+        } else if (s.pts && s.pts.length > 1){
           ctx.beginPath();
           ctx.moveTo(s.pts[0].x, s.pts[0].y);
           for (var i=1;i<s.pts.length;i++) ctx.lineTo(s.pts[i].x, s.pts[i].y);
@@ -398,6 +409,16 @@
           var p = msg.payload;
           if (!p) return;
           for (var i=0;i<boardStrokes.length;i++){ if (boardStrokes[i].id===p.strokeId){ boardStrokes.splice(i,1); break; } }
+          redrawBoard();
+        })
+        .on("broadcast", { event:"strokeUpdate" }, function(msg){
+          // 老师画的直线/矩形/圆形，或者被老师拖动过位置的笔画，会整个一起同步过来
+          var p = msg.payload;
+          if (!p) return;
+          var obj = { id:p.id, type:p.type, owner:p.owner, color:p.color, size:p.size, x1:p.x1, y1:p.y1, x2:p.x2, y2:p.y2, pts:p.pts };
+          var idx = -1;
+          for (var i=0;i<boardStrokes.length;i++){ if (boardStrokes[i].id===p.id){ idx=i; break; } }
+          if (idx>=0) boardStrokes[idx] = obj; else boardStrokes.push(obj);
           redrawBoard();
         })
         .subscribe();
