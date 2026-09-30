@@ -267,12 +267,21 @@
   .pdf-page-wrap canvas{ position:absolute; inset:0; width:100%; height:100%; touch-action:none; cursor:crosshair; }
   body.stage-mode .pdf-page-wrap{ max-width:100%; }
   /* 全屏模式：把整个「上课 PDF」区块（工具列 + 内容）一起放大铺满屏幕，
-     方便投影时用，工具列一样贴在上面，可以随时选工具/换页/结束全屏。 */
-  #pdfContent:fullscreen{ background:var(--bg); padding:18px 24px; overflow:auto; }
+     方便投影时用，工具列一样贴在上面，可以随时选工具/换页/结束全屏。
+     这里刻意改成「用高度去框住整页」（而不是像平常那样用宽度去框），
+     这样投影/全屏时一整页会自动缩小到刚好塞进屏幕高度里，不用再往下滑
+     才看得到页面下半部——之前用宽度去框，直书page比例的PDF页放大后
+     比屏幕还高，画笔画布(canvas)又盖住几乎整个画面、把手指滑动/触控
+     板滑动的手势整个吃掉，才会滑不动；现在整页一次显示完，就不需要再
+     滑动了。 */
+  #pdfContent:fullscreen{ background:var(--bg); padding:16px 24px; overflow:auto; }
   #pdfContent:fullscreen .pdf-toolbar{ background:var(--bg); }
-  #pdfContent:fullscreen .pdf-page-wrap{ max-width:min(92vw, 900px); }
-  #pdfContent:-webkit-full-screen{ background:var(--bg); padding:18px 24px; overflow:auto; }
-  #pdfContent:-webkit-full-screen .pdf-page-wrap{ max-width:min(92vw, 900px); }
+  #pdfContent:fullscreen .pdf-page-wrap{ width:auto; height:calc(100vh - 130px); max-height:calc(100vh - 130px); max-width:94vw; aspect-ratio:1275 / 1842; margin:0 auto; }
+  #pdfContent:fullscreen .pdf-page-wrap img{ width:100%; height:100%; object-fit:contain; }
+  #pdfContent:-webkit-full-screen{ background:var(--bg); padding:16px 24px; overflow:auto; }
+  #pdfContent:-webkit-full-screen .pdf-toolbar{ background:var(--bg); }
+  #pdfContent:-webkit-full-screen .pdf-page-wrap{ width:auto; height:calc(100vh - 130px); max-height:calc(100vh - 130px); max-width:94vw; aspect-ratio:1275 / 1842; margin:0 auto; }
+  #pdfContent:-webkit-full-screen .pdf-page-wrap img{ width:100%; height:100%; object-fit:contain; }
 
   @media (max-width: 900px){
     .sidebar{ position:fixed; left:0; top:0; bottom:0; z-index:20; transform:translateX(-100%); transition:transform .2s ease; }
@@ -3033,8 +3042,14 @@ function renderPdfPage(){
    叠在一起；每次打开/切回来，或窗口大小改变（比如转横向），都重新量一次。 */
 function updatePdfToolbarStickyTop(){
   var toolbar = document.querySelector("#pdfContent .pdf-toolbar");
-  var topbarEl = document.querySelector(".topbar");
   if (!toolbar) return;
+  var isFs = document.fullscreenElement || document.webkitFullscreenElement;
+  if (isFs){
+    // 全屏时外层的 .topbar 根本不会显示出来，工具列直接贴在全屏区块最上面就好
+    toolbar.style.top = "0px";
+    return;
+  }
+  var topbarEl = document.querySelector(".topbar");
   toolbar.style.top = (topbarEl ? topbarEl.offsetHeight : 60) + "px";
 }
 window.addEventListener("resize", function(){ if (!$("pdfContent").hidden) updatePdfToolbarStickyTop(); });
@@ -3101,8 +3116,8 @@ $("pdfFullscreenBtn").addEventListener("click", function(){
     if (exit) exit.call(document);
   }
 });
-document.addEventListener("fullscreenchange", updatePdfFullscreenBtnLabel);
-document.addEventListener("webkitfullscreenchange", updatePdfFullscreenBtnLabel);
+document.addEventListener("fullscreenchange", function(){ updatePdfFullscreenBtnLabel(); updatePdfToolbarStickyTop(); });
+document.addEventListener("webkitfullscreenchange", function(){ updatePdfFullscreenBtnLabel(); updatePdfToolbarStickyTop(); });
 function updatePdfFullscreenBtnLabel(){
   var isFs = document.fullscreenElement || document.webkitFullscreenElement;
   $("pdfFullscreenBtn").textContent = isFs ? "⛶ 退出全屏" : "⛶ 全屏";
