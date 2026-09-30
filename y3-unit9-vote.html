@@ -17,6 +17,7 @@
     correct_option text,
     mode text not null default 'choice',
     payload jsonb,
+    closed boolean not null default false,
     updated_at timestamptz not null default now()
   );
   insert into live_poll (id, version, question, options)
@@ -24,11 +25,12 @@
     on conflict (id) do nothing;
 
   -- 如果之前已经建过 live_poll / live_votes 表（还没有姓名/正确答案功能，
-  -- 或者还没有数字键盘题、拖拽题的举手统计功能），只需要多跑这几行，把新
-  -- 栏位加上去就好，不用重建整张表：
+  -- 或者还没有数字键盘题、拖拽题的举手统计功能，或者还没有「结束并公布
+  -- 答案」功能），只需要多跑这几行，把新栏位加上去就好，不用重建整张表：
   -- alter table live_poll add column if not exists correct_option text;
   -- alter table live_poll add column if not exists mode text not null default 'choice';
   -- alter table live_poll add column if not exists payload jsonb;
+  -- alter table live_poll add column if not exists closed boolean not null default false;
   -- alter table live_votes add column if not exists name text not null default '';
   -- alter table live_votes add column if not exists client_id text not null default '';
 
@@ -76,6 +78,14 @@
   （chart：长条图/饼分图/记数统计表，拆成数字文字传过来，不是传图片），
   让学生这边能生成一模一样的题目和图表，照着图表回答。
 
+  「结束并公布答案」：老师按下这个按钮后，live_poll.closed 会被设成
+  true（通过 Realtime 的 postgres_changes 马上传到这一页）。这一页收到
+  之后会把互动作答的画面换成「已截止」的静态画面，不管有没有交过答案，
+  都不能再送新的答案过去（送答案前也会再检查一次 closed，防止老师按下
+  结束的那一瞬间刚好有人按提交）。老师端会等按下结束之后，才会显示正确
+  答案（打勾）和最快答对的前三名排行榜——这一页（学生端）本身不需要
+  显示正确答案或排行榜，那些只在老师的画面上呈现。
+
   部署方式：把这个文件跟 index.html 放在同一个 GitHub 仓库根目录下，
   一起推上 Vercel，网址就会是 你的网址.vercel.app/y3-unit9-vote.html，
   这个网址就是要发给学生在课堂上打开的。
@@ -118,6 +128,7 @@
   .name-err{ font-size:12px; color:#B4242E; min-height:16px; margin-top:6px; }
   .me-row{ font-size:12.5px; color:var(--ink-soft); margin:-10px 0 16px; }
   .me-row button{ font:inherit; border:none; background:none; color:var(--primary); text-decoration:underline; cursor:pointer; padding:0; margin-left:4px; }
+  .closed-banner{ font-size:15px; font-weight:800; color:var(--ink-soft); background:var(--bg-soft); border-radius:16px; padding:18px 14px; }
 
   /* 数字键盘作答：跟老师端 makeNumberPad 长得、用起来都一样 */
   .numpad-wrap{ display:flex; flex-direction:column; align-items:center; gap:14px; }
@@ -201,6 +212,7 @@
     var currentVersion = 0;
     var myName = "";
     var myClientId = "";
+    var closedVersions = {}; // 记住哪些题目已经被老师结束了，避免提交时刚好卡在临界点
 
     function el(tag, cls, text){ var e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
     function clearEl(node){ while (node.firstChild) node.removeChild(node.firstChild); }
@@ -217,6 +229,12 @@
        字符串的拼法要跟老师端 scrapeCurrentQuestion() 算 correct_option
        用的拼法完全一致，老师那边才能正确判断对错、算排行榜。 */
     function submitAnswer(poll, choiceStr, hooks){
+      if (closedVersions[poll.version]){
+        hooks.statusEl.textContent = "⏹️ 老师已经结束这一题了，不能再提交囉。";
+        hooks.statusEl.className = "status no";
+        hooks.unlock();
+        return;
+      }
       client.from("live_votes").insert({ version: poll.version, choice: choiceStr, name: myName, client_id: myClientId }).then(function(res){
         if (res.error){
           hooks.statusEl.textContent = "提交失败：" + res.error.message;
@@ -463,6 +481,27 @@
       else renderChoiceQuestion(poll, alreadyVoted);
     }
 
+    /* 老师按下「结束并公布答案」之后，这一题在学生端就换成静态画面：
+       题目本身（跟图表，如果有的话）还是留着方便对照，但不管有没有交过，
+       都不会再有能按的按钮/键盘/拖拽格子了。正确答案跟排行榜只在老师
+       自己的画面上呈现，这一页不需要显示。 */
+    function renderClosedQuestion(poll){
+      clearEl(app);
+      app.appendChild(el("div", "qtext", poll.question || "（本题）"));
+      var chart = poll.payload && poll.payload.chart;
+      if (chart){
+        var chartBox = el("div", "qchart");
+        renderChart(chartBox, chart);
+        app.appendChild(chartBox);
+      }
+      var alreadyVoted = false;
+      try { alreadyVoted = !!localStorage.getItem(votedKey(poll.version)); } catch (e) {}
+      var msg = alreadyVoted
+        ? "✅ 你已经提交过这一题的答案啦，老师正在公布结果～"
+        : "⏹️ 这一题已经截止作答了，下一题再加油！";
+      app.appendChild(el("div", "closed-banner", msg));
+    }
+
     function hasUsableQuestion(row){
       if (!row || !row.version) return false;
       var mode = row.mode || "choice";
@@ -477,7 +516,12 @@
         return;
       }
       currentVersion = row.version;
-      renderQuestion(row);
+      if (row.closed){
+        closedVersions[row.version] = true;
+        renderClosedQuestion(row);
+      } else {
+        renderQuestion(row);
+      }
     }
 
     function startVoting(){
