@@ -1407,20 +1407,22 @@ function sendPoll(scraped){
   var tally = {}; // 只有选择题模式会用到：{选项文字: 票数}
   var rowEls = {};
   var binaryEls = null; // 只有数字键盘/拖拽模式会用到
+  var pollClosed = false; // 老师按「结束并公布答案」之前，不能让学生看到（或老师自己不小心先看到）正确答案在哪
   var barsWrap = el("div","poll-opts");
   if (isChoiceMode){
     scraped.options.forEach(function(o){ tally[o]=0; });
     scraped.options.forEach(function(o){
       var row = el("div","poll-opt-row");
       var isCorrect = scraped.correctAnswer != null && o === scraped.correctAnswer;
-      row.appendChild(el("div","poll-opt-label", o + (isCorrect ? " ✓" : "")));
+      var labelEl = el("div","poll-opt-label", o);
+      row.appendChild(labelEl);
       var track = el("div","poll-bar-track");
       var fill = el("div","poll-bar-fill",""); fill.style.width="0%";
       track.appendChild(fill);
       row.appendChild(track);
       var count = el("div","poll-count","0");
       row.appendChild(count);
-      rowEls[o] = {fill:fill, count:count};
+      rowEls[o] = {fill:fill, count:count, label:labelEl, isCorrect:isCorrect};
       barsWrap.appendChild(row);
     });
   } else {
@@ -1442,13 +1444,40 @@ function sendPoll(scraped){
   var totalEl = el("div","poll-total","正在发送给学生…");
   body.appendChild(totalEl);
 
+  /* 在老师按「结束并公布答案」之前，正确答案（选择题的 ✓）跟排行榜都先不
+     显示——只看得到已经提交几人、答对/答错各多少票，避免答案提早曝光，
+     也让「结束」这个动作有实际意义（学生也会同时被挡住、不能再提交）。 */
+  var endActions = el("div","poll-actions"); endActions.style.marginBottom = "10px";
+  var endBtn = el("button","poll-send","⏹️ 结束并公布答案"); endBtn.type="button";
+  endBtn.hidden = scraped.correctAnswer == null;
+  endActions.appendChild(endBtn);
+  body.appendChild(endActions);
+
   var lbTitle = el("div","poll-total","🏆 最快答对（前 3 名）");
   var lbWrap = el("div","poll-leaderboard");
-  lbTitle.hidden = scraped.correctAnswer == null;
-  lbWrap.hidden = scraped.correctAnswer == null;
+  lbTitle.hidden = true;
+  lbWrap.hidden = true;
   body.appendChild(lbTitle);
   body.appendChild(lbWrap);
   var leaderboard = []; // [{name, ms}], 只放答对的人，按用时从快到慢排
+
+  function revealAnswerAndLeaderboard(){
+    if (pollClosed) return;
+    pollClosed = true;
+    endBtn.hidden = true;
+    if (isChoiceMode){
+      Object.keys(rowEls).forEach(function(o){
+        if (rowEls[o].isCorrect) rowEls[o].label.textContent = o + " ✓";
+      });
+    }
+    lbTitle.hidden = false;
+    lbWrap.hidden = false;
+    renderLeaderboard();
+    if (pollChannel){ pollClient.removeChannel(pollChannel); pollChannel = null; } // 结束后不再计入新提交
+    pollClient.from("live_poll").update({ closed:true }).eq("id","current").eq("version", thisVersion)
+      .then(function(res){ if (res && res.error) totalEl.textContent += "（提醒学生端标记失败，学生那边可能还能继续提交："+res.error.message+"）"; });
+  }
+  endBtn.addEventListener("click", revealAnswerAndLeaderboard);
 
   function renderTally(){
     if (isChoiceMode){
@@ -1486,12 +1515,11 @@ function sendPoll(scraped){
   pollClient.from("live_poll").upsert({
     id:"current", version:thisVersion, question:scraped.question, options:scraped.options,
     correct_option:scraped.correctAnswer, mode:scraped.mode, payload:scraped.payload,
-    updated_at:new Date().toISOString()
+    closed:false, updated_at:new Date().toISOString()
   }).then(function(res){
     if (res.error){ totalEl.textContent = "发送失败："+res.error.message; return; }
     if (pollChannel){ pollClient.removeChannel(pollChannel); }
     renderTally();
-    if (scraped.correctAnswer != null) renderLeaderboard();
     pollChannel = pollClient.channel("live-votes-"+thisVersion)
       .on("postgres_changes", { event:"INSERT", schema:"public", table:"live_votes", filter:"version=eq."+thisVersion }, function(payload){
         var row = payload.new;
