@@ -362,6 +362,15 @@
         <input type="checkbox" id="boardSubImageToggle" checked style="width:15px; height:15px; accent-color:var(--primary); cursor:pointer;">
         🖼️ 同时把本页画面（含图表）复制给每位学生当底图
       </label>
+      <div class="board-roster-actions" style="margin-bottom:8px; align-items:center;">
+        <button class="board-mini-btn" id="boardSubImgPickBtn" type="button">📁 改用电脑里的图片当题目</button>
+        <input type="file" id="boardSubImgFileInput" accept="image/*" style="display:none">
+        <span id="boardSubImgPreviewWrap" style="display:none; align-items:center; gap:6px;">
+          <img id="boardSubImgPreview" alt="" style="width:36px; height:36px; object-fit:cover; border-radius:8px; border:1px solid var(--line);">
+          <button class="board-mini-btn" id="boardSubImgClearBtn" type="button">✖ 移除这张图</button>
+        </span>
+      </div>
+      <div class="board-roster-hint" style="margin-top:0; margin-bottom:8px;">☝️ 例如把一张课外的题目/工作纸照片选进来，这一轮学生拿到的底图就会是这张图片，而不是本页画面；选了图片之后，上面「同时把本页画面…」那个选项会自动失效（一次只能用一种底图）。也可以先点一下题目输入框，再按 Ctrl+V（Mac 是 Cmd+V）直接贴上复制好的图片，不用特地存成档案再选。</div>
       <div class="board-roster-actions" style="margin-bottom:6px;">
         <button class="board-mini-btn" id="boardSubToggleBtn" type="button">▶️ 发布题目并开始</button>
         <button class="board-mini-btn" id="boardSubNewRoundBtn" type="button" hidden>🔄 换一题重新开始</button>
@@ -1609,6 +1618,7 @@ var boardSubStartedAt = 0; // 本地时间戳（毫秒），用来算「谁最�
 var boardSubChannel = null;
 var boardSubPlacedCount = 0;
 var boardSubEntries = {}; // client_id -> {name, ms, grade: null|"correct"|"wrong"}
+var boardSubCustomImage = null; // 老师从电脑选来当题目底图的图片（data URL），有就优先用它，不用本页画面
 
 function initBoardButton(){
   $("boardBtn").hidden = false;
@@ -2343,8 +2353,11 @@ function renderSubLeaderboard(){
 }
 
 /* 「附上本页图片」勾选时会先花一点时间截图，所以开始/换题按钮改成
-   等截图结果出来再真的开始这一轮，中途按钮会先停用，避免连点两次。 */
+   等截图结果出来再真的开始这一轮，中途按钮会先停用，避免连点两次。
+   如果老师从电脑另外选了一张图片当题目（boardSubCustomImage），优先用那张，
+   不再去截本页画面——一次练习只用一种底图，比较不会搞混。 */
 function captureSubImageIfWanted(){
+  if (boardSubCustomImage) return Promise.resolve(boardSubCustomImage);
   if (!$("boardSubImageToggle").checked) return Promise.resolve(null);
   return captureStageImage().then(function(imageDataUrl){
     if (!imageDataUrl){
@@ -2591,13 +2604,52 @@ $("boardImgFileInput").addEventListener("change", function(e){
   if (e.target.files && e.target.files[0]) handleBoardImageFile(e.target.files[0]);
   e.target.value = "";
 });
+
+/* 各自练习：让老师可以从电脑另外选一张图片（例如课外工作纸照片）当这一轮
+   的题目底图，不一定要用本页画面。选了图片就自动取消「同时把本页画面…」
+   那个勾选，避免两边都想用、老师搞不清楚这一轮到底会发给学生哪张图。 */
+function setBoardSubCustomImage(dataUrl){
+  boardSubCustomImage = dataUrl;
+  $("boardSubImgPreview").src = dataUrl || "";
+  $("boardSubImgPreviewWrap").style.display = dataUrl ? "inline-flex" : "none";
+  if (dataUrl) $("boardSubImageToggle").checked = false;
+}
+$("boardSubImgPickBtn").addEventListener("click", function(){ $("boardSubImgFileInput").click(); });
+$("boardSubImgFileInput").addEventListener("change", function(e){
+  var file = e.target.files && e.target.files[0];
+  e.target.value = "";
+  if (!file || !/^image\//.test(file.type)) return;
+  var reader = new FileReader();
+  reader.onload = function(){ setBoardSubCustomImage(reader.result); };
+  reader.onerror = function(){ alert("这张图片打不开，请换一张试试。"); };
+  reader.readAsDataURL(file);
+});
+$("boardSubImgClearBtn").addEventListener("click", function(){ setBoardSubCustomImage(null); });
+$("boardSubImageToggle").addEventListener("change", function(){
+  if (this.checked && boardSubCustomImage) setBoardSubCustomImage(null);
+});
 document.addEventListener("paste", function(e){
   if (!$("boardOverlay").classList.contains("show")) return;
   var items = (e.clipboardData && e.clipboardData.items) || [];
   for (var i=0;i<items.length;i++){
     if (items[i].type && items[i].type.indexOf("image/")===0){
       var file = items[i].getAsFile();
-      if (file){ handleBoardImageFile(file); e.preventDefault(); }
+      if (!file) break;
+      e.preventDefault();
+      /* 光标停在「各自练习」的题目输入框（或刚点过旁边选图按钮）时贴上的图片，
+         当成这一轮的题目底图；其他情况维持原本行为，贴到共享画板本身当一张图。
+         这样老师只要先点一下题目输入框、再 Ctrl+V／Cmd+V，就能直接贴题目图片，
+         不用特地去点「选图片」再从电脑里找档案。 */
+      var target = document.activeElement;
+      var pasteAsSubQuestion = target === $("boardSubQuestionInput") || target === $("boardSubImgPickBtn");
+      if (pasteAsSubQuestion){
+        var reader = new FileReader();
+        reader.onload = function(){ setBoardSubCustomImage(reader.result); };
+        reader.onerror = function(){ alert("这张图片打不开，请换一张试试。"); };
+        reader.readAsDataURL(file);
+      } else {
+        handleBoardImageFile(file);
+      }
       break;
     }
   }
