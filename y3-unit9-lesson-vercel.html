@@ -1,42 +1,11 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+</head>
+<body>
 <title>单元九课堂手册</title>
-<!--
-  =====================================================================
-  这是「教师课堂手册」的 Vercel 部署版，跟 y3-unit9-vote.html（学生举手
-  统计作答页）、y3-unit9-board.html（学生共享白板页）配套使用。
-
-  为什么需要这个版本？
-  Claude 网页版发布的手册链接（Artifact）安全限制比较严格，页面里可以
-  加载 Supabase 的程式库，但是没办法真正连线到 Supabase 服务器发送/
-  接收资料，所以「举手统计」「共享白板」这两个按钮在 Artifact 版本里
-  是打不开、连不上的。把手册也放到 Vercel（一般网页，没有这层限制），
-  这两个功能才能真正连上 Supabase、跟学生实时互动。
-
-  部署方式：跟 index.html、y3-unit9-vote.html、y3-unit9-board.html 放在
-  同一个 GitHub 仓库根目录下，一起推上 Vercel，网址就会是
-  你的网址.vercel.app/y3-unit9-lesson-vercel.html
-  —— 老师上课时改用这个网址打开手册（而不是 Claude 的 Artifact 链接），
-  「举手统计」和「共享白板」才会生效。手册本身内容（16 页教具、各种练习
-  题）完全一样，这个版本只是多了这两个功能能正常运作。
-
-  共享白板需要额外建一张 Supabase 表（SQL、RLS、GRANT 语句、Realtime
-  设置说明都写在 y3-unit9-board.html 文件最上面的注释里，请照着跑一遍）。
-
-  【2026-08 更新：白板改成「按学生授权」】
-  白板不再是「全班一起画 / 全班都不能画」的开关，改成老师在白板面板里
-  看到一份实时更新的在线学生名单（学生进入 y3-unit9-board.html 前要先
-  输入名字），老师勾选某个学生，才授权那个学生画，其他学生只能看。
-  这需要把 live_board 表加一个新字段，如果你的 Supabase 项目是照旧版
-  说明建的表（只有 drawing_enabled 字段），请在 SQL Editor 再跑一次：
-    alter table live_board add column if not exists
-      allowed_client_ids jsonb not null default '[]'::jsonb;
-  旧的 drawing_enabled 字段留着不影响，可以之后手动删除，不删也没关系。
-  =====================================================================
--->
 <style>
   @import url('https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Noto+Sans+SC:wght@400;500;700;900&family=Fredoka:wght@500;700&display=swap');
 
@@ -209,10 +178,17 @@
 
   .poll-btn{ display:inline-flex; align-items:center; gap:6px; background:var(--panel); border:1px solid var(--line); border-radius:999px; padding:8px 14px; font-weight:700; font-size:13px; cursor:pointer; color:var(--ink-soft); }
   .poll-btn:hover{ background:var(--bg-soft); }
-  .poll-overlay{ position:fixed; inset:0; background:rgba(20,20,25,.45); display:none; align-items:center; justify-content:center; z-index:200; padding:20px; }
+  /* 弹窗改成「浮动窗口」：外层不挡住、不遮暗底下的内容（pointer-events:none），
+     只有窗口本身可以点，并且可以拖动标题栏移动位置、拖右下角调整大小，
+     这样老师可以一边看统计/画板，一边看题目本身或课本内容。 */
+  .poll-overlay{ position:fixed; inset:0; background:transparent; display:none; align-items:center; justify-content:center; z-index:200; padding:20px; pointer-events:none; }
   .poll-overlay.show{ display:flex; }
-  .poll-panel{ background:var(--panel); border-radius:22px; box-shadow:var(--shadow); padding:24px 26px; max-width:460px; width:100%; max-height:86vh; overflow-y:auto; }
-  .poll-panel h3{ font-family:"ZCOOL KuaiLe",sans-serif; font-size:19px; margin:0 0 10px; }
+  .poll-panel{ background:var(--panel); border-radius:22px; box-shadow:var(--shadow); padding:0 26px 24px; max-width:460px; width:100%; max-height:86vh; overflow:auto; resize:both; min-width:300px; min-height:220px; pointer-events:auto; }
+  /* 标题栏（拖动把手）固定贴在弹窗内部顶端（position:sticky），这样不管发布/发送给学生后
+     内容变多长、面板自己往下卷动查看名单或提交状况，标题栏永远留在最上面、随时都能抓住
+     它拖动或换位置，不会因为内容变长就「够不到」标题栏、感觉整个窗口被卡住不能动。 */
+  .poll-panel h3{ font-family:"ZCOOL KuaiLe",sans-serif; font-size:19px; margin:0 0 10px; padding:24px 0 10px; cursor:move; user-select:none; position:sticky; top:0; z-index:2; background:var(--panel); }
+  .poll-panel h3::after{ content:"　✥ 可拖动 / 右下角可缩放"; font-size:10.5px; font-weight:400; color:var(--ink-soft); font-family:"Noto Sans SC",sans-serif; }
   .poll-q{ font-size:14.5px; font-weight:700; margin-bottom:10px; }
   .poll-opts{ display:flex; flex-direction:column; gap:8px; margin-bottom:14px; }
   .poll-opt-row{ display:flex; align-items:center; gap:10px; }
@@ -223,6 +199,11 @@
   .poll-actions{ display:flex; gap:10px; justify-content:flex-end; }
   .poll-total{ font-size:12.5px; color:var(--ink-soft); margin-bottom:10px; }
   .poll-empty{ font-size:13.5px; color:var(--ink-soft); text-align:center; padding:20px 0; }
+  .poll-leaderboard{ display:flex; flex-direction:column; gap:6px; margin-bottom:14px; }
+  .poll-lb-row{ display:flex; align-items:center; gap:10px; background:var(--bg-soft); border-radius:12px; padding:8px 12px; }
+  .poll-lb-medal{ font-size:18px; flex:0 0 24px; }
+  .poll-lb-name{ flex:1; font-weight:800; font-size:13.5px; }
+  .poll-lb-time{ font-weight:700; font-size:12.5px; color:var(--secondary-ink,var(--ink-soft)); }
   .poll-close{ background:var(--bg-soft); border:1px solid var(--line); border-radius:999px; padding:9px 16px; font-weight:700; font-size:13px; cursor:pointer; }
   .poll-send{ background:var(--primary); color:#fff; border:none; border-radius:999px; padding:9px 18px; font-weight:800; font-size:13px; cursor:pointer; }
 
@@ -255,6 +236,18 @@
   .board-roster-item .tag{ font-size:11px; font-weight:800; color:var(--ink-soft); }
   .board-roster-item.allowed .tag{ color:var(--secondary-ink); }
   .board-roster-hint{ margin-top:8px; font-size:11.5px; color:var(--ink-soft); }
+  .board-sub-question-input{ width:100%; font:inherit; font-size:13px; padding:8px 10px; border-radius:12px; border:1.5px solid var(--line); resize:vertical; margin-bottom:8px; box-sizing:border-box; }
+  .board-sub-question-input:focus{ outline:none; border-color:var(--primary); }
+  .board-sub-item{ display:flex; align-items:center; gap:8px; padding:7px 10px; border-radius:12px; background:var(--bg-soft); border:1px solid var(--line); }
+  .board-sub-item .name{ font-weight:700; font-size:13px; flex:1; }
+  .board-sub-item .elapsed{ font-size:11px; color:var(--ink-soft); font-weight:700; }
+  .board-sub-item .grade-btn{ border:1.5px solid var(--line); background:var(--panel); border-radius:999px; width:26px; height:26px; font-size:13px; cursor:pointer; line-height:1; padding:0; }
+  .board-sub-item .grade-btn.on-correct{ background:var(--correct-bg); border-color:var(--secondary); }
+  .board-sub-item .grade-btn.on-wrong{ background:var(--wrong-bg); border-color:var(--wrong); }
+  .board-sub-lb-row{ display:flex; align-items:center; gap:8px; padding:6px 10px; border-radius:12px; background:var(--correct-bg); }
+  .board-sub-lb-row .medal{ font-size:15px; flex:0 0 20px; }
+  .board-sub-lb-row .name{ flex:1; font-weight:800; font-size:13px; }
+  .board-sub-lb-row .time{ font-size:11.5px; font-weight:700; color:var(--secondary-ink); }
 
   @media (max-width: 900px){
     .sidebar{ position:fixed; left:0; top:0; bottom:0; z-index:20; transform:translateX(-100%); transition:transform .2s ease; }
@@ -266,9 +259,6 @@
   @media (prefers-reduced-motion: reduce){ *{ transition-duration:.001ms !important; } }
 </style>
 
-
-</head>
-<body>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
 <div class="shell">
@@ -1523,7 +1513,7 @@ function makeFloatingPanel(panel, handle){
   }
   function clientPt(e){ return e.touches && e.touches.length ? e.touches[0] : e; }
   function onDown(e){
-    if (e.target !== handle) return; // 只有标题栏本身能拖，避免点到里面的按钮也触发拖动
+    if (!handle.contains(e.target)) return; // 只有标题栏本身（含里面的文字/图示）能拖，避免点到面板其他按钮也触发拖动
     toFloating();
     dragging = true;
     var pt = clientPt(e);
@@ -2725,4 +2715,6 @@ render();
 
 })();
 </script>
-</body></html>
+
+</body>
+</html>
