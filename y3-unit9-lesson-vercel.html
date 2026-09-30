@@ -262,26 +262,43 @@
   .pdf-toolbar-group{ display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
   .pdf-page-nav{ display:flex; align-items:center; gap:10px; }
   .board-mini-btn.pdftool-active{ background:var(--primary); color:#fff; border-color:transparent; }
-  .pdf-page-wrap{ position:relative; border:2px solid var(--line); border-radius:16px; overflow:hidden; background:#fff; max-width:640px; width:100%; margin:0 auto; box-shadow:var(--shadow); }
+  /* flex-shrink:0 是关键：pdf-content 是直排的 flex 容器，这个 wrap 本身
+     又设了 overflow:hidden，如果不设 flex-shrink:0，浏览器在容器（尤其
+     全屏时高度被卡死）装不下的时候，会把这块直接「压扁」去塞进去、多出
+     来的图会被 overflow:hidden 切掉，而不是让它整个撑出去、交给外层
+     #pdfContent 的 overflow:auto 去滚动——这就是「大/特大」尺寸看起来
+     滑不动的真正原因（其实是内容被压扁裁掉了，不是真的滑不动）。 */
+  .pdf-page-wrap{ position:relative; border:2px solid var(--line); border-radius:16px; overflow:hidden; background:#fff; max-width:640px; width:100%; margin:0 auto; box-shadow:var(--shadow); flex-shrink:0; }
   .pdf-page-wrap img{ display:block; width:100%; height:auto; user-select:none; -webkit-user-drag:none; pointer-events:none; }
   .pdf-page-wrap canvas{ position:absolute; inset:0; width:100%; height:100%; touch-action:none; cursor:crosshair; }
   body.stage-mode .pdf-page-wrap{ max-width:100%; }
   /* 全屏模式：把整个「上课 PDF」区块（工具列 + 内容）一起放大铺满屏幕，
      方便投影时用，工具列一样贴在上面，可以随时选工具/换页/结束全屏。
-     这里刻意改成「用高度去框住整页」（而不是像平常那样用宽度去框），
-     这样投影/全屏时一整页会自动缩小到刚好塞进屏幕高度里，不用再往下滑
-     才看得到页面下半部——之前用宽度去框，直书page比例的PDF页放大后
-     比屏幕还高，画笔画布(canvas)又盖住几乎整个画面、把手指滑动/触控
-     板滑动的手势整个吃掉，才会滑不动；现在整页一次显示完，就不需要再
-     滑动了。 */
-  #pdfContent:fullscreen{ background:var(--bg); padding:16px 24px; overflow:auto; }
-  #pdfContent:fullscreen .pdf-toolbar{ background:var(--bg); }
-  #pdfContent:fullscreen .pdf-page-wrap{ width:auto; height:calc(100vh - 130px); max-height:calc(100vh - 130px); max-width:94vw; aspect-ratio:1275 / 1842; margin:0 auto; }
-  #pdfContent:fullscreen .pdf-page-wrap img{ width:100%; height:100%; object-fit:contain; }
+     全屏时可以选3种大小（见 JS 的 pdfZoom 相关代码，用 #pdfContent 的
+     data-pdf-zoom 属性切换）：
+     - fit（适应整页）：用高度去框住整页，一次看完整页，不用滑动。
+     - large / xlarge（大 / 特大）：用宽度去放大，字会更清楚，但整页会
+       比屏幕高，这时候可以滑动（画布改成 touch-action:pan-y，让上下滑
+       的手势可以直接拿去滚动画面，不会被画笔的画布整个吃掉），滑不动/
+       滑不准的话也可以直接按工具列的「⬆️ 上移／⬇️ 下移」按钮。 */
+  #pdfContent:fullscreen,
   #pdfContent:-webkit-full-screen{ background:var(--bg); padding:16px 24px; overflow:auto; }
+  #pdfContent:fullscreen .pdf-toolbar,
   #pdfContent:-webkit-full-screen .pdf-toolbar{ background:var(--bg); }
-  #pdfContent:-webkit-full-screen .pdf-page-wrap{ width:auto; height:calc(100vh - 130px); max-height:calc(100vh - 130px); max-width:94vw; aspect-ratio:1275 / 1842; margin:0 auto; }
-  #pdfContent:-webkit-full-screen .pdf-page-wrap img{ width:100%; height:100%; object-fit:contain; }
+
+  #pdfContent[data-pdf-zoom="fit"]:fullscreen .pdf-page-wrap,
+  #pdfContent[data-pdf-zoom="fit"]:-webkit-full-screen .pdf-page-wrap{ width:auto; height:calc(100vh - 130px); max-height:calc(100vh - 130px); max-width:94vw; aspect-ratio:1275 / 1842; margin:0 auto; }
+  #pdfContent[data-pdf-zoom="fit"]:fullscreen .pdf-page-wrap img,
+  #pdfContent[data-pdf-zoom="fit"]:-webkit-full-screen .pdf-page-wrap img{ width:100%; height:100%; object-fit:contain; }
+
+  #pdfContent[data-pdf-zoom="large"]:fullscreen .pdf-page-wrap,
+  #pdfContent[data-pdf-zoom="large"]:-webkit-full-screen .pdf-page-wrap{ max-width:min(92vw, 900px); }
+  #pdfContent[data-pdf-zoom="xlarge"]:fullscreen .pdf-page-wrap,
+  #pdfContent[data-pdf-zoom="xlarge"]:-webkit-full-screen .pdf-page-wrap{ max-width:min(96vw, 1100px); }
+  #pdfContent[data-pdf-zoom="large"]:fullscreen .pdf-page-wrap canvas,
+  #pdfContent[data-pdf-zoom="xlarge"]:fullscreen .pdf-page-wrap canvas,
+  #pdfContent[data-pdf-zoom="large"]:-webkit-full-screen .pdf-page-wrap canvas,
+  #pdfContent[data-pdf-zoom="xlarge"]:-webkit-full-screen .pdf-page-wrap canvas{ touch-action:pan-y; }
 
   @media (max-width: 900px){
     .sidebar{ position:fixed; left:0; top:0; bottom:0; z-index:20; transform:translateX(-100%); transition:transform .2s ease; }
@@ -337,6 +354,18 @@ window.__PDF_PAGES__ = ["data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAlgCWAAD/2wBD
           <button class="board-mini-btn" id="pdfClearPageBtn" type="button">🗑️ 清空这一页标注</button>
           <button class="board-mini-btn" id="pdfFullscreenBtn" type="button">⛶ 全屏</button>
           <button class="board-mini-btn" id="pdfSaveAsPdfBtn" type="button">⬇️ 保存为 PDF（存到电脑）</button>
+        </div>
+        <!-- 全屏时才用得上的「选大小」跟「上移/下移」按钮：平常互动课件画面
+             下不会显示，只有进入全屏才会跳出来（见 JS 的 fullscreenchange）。
+             选大一点的尺寸时整页会比屏幕高，滑不动或滑不准的时候，就用这
+             两个按钮直接往上/往下移动画面。 -->
+        <div class="pdf-toolbar-group" id="pdfZoomGroup" hidden>
+          <span class="board-roster-title" style="font-size:12.5px;">🔍大小：</span>
+          <button class="board-mini-btn pdftool-active" id="pdfZoomFitBtn" data-pdfzoom="fit" type="button">适应整页</button>
+          <button class="board-mini-btn" id="pdfZoomLargeBtn" data-pdfzoom="large" type="button">大</button>
+          <button class="board-mini-btn" id="pdfZoomXlBtn" data-pdfzoom="xlarge" type="button">特大</button>
+          <button class="board-mini-btn" id="pdfScrollUpBtn" type="button">⬆️ 上移</button>
+          <button class="board-mini-btn" id="pdfScrollDownBtn" type="button">⬇️ 下移</button>
         </div>
         <div class="pdf-page-nav">
           <button class="nav-btn" id="pdfPrevBtn" type="button">← 上一页</button>
@@ -3109,6 +3138,7 @@ $("pdfFullscreenBtn").addEventListener("click", function(){
   var target = $("pdfContent");
   var isFs = document.fullscreenElement || document.webkitFullscreenElement;
   if (!isFs){
+    if (!target.dataset.pdfZoom) target.dataset.pdfZoom = "fit";
     var req = target.requestFullscreen || target.webkitRequestFullscreen;
     if (req) req.call(target);
   } else {
@@ -3116,12 +3146,39 @@ $("pdfFullscreenBtn").addEventListener("click", function(){
     if (exit) exit.call(document);
   }
 });
-document.addEventListener("fullscreenchange", function(){ updatePdfFullscreenBtnLabel(); updatePdfToolbarStickyTop(); });
-document.addEventListener("webkitfullscreenchange", function(){ updatePdfFullscreenBtnLabel(); updatePdfToolbarStickyTop(); });
+/* 全屏时才需要「选大小」跟「上移/下移」这组按钮，平常互动课件画面下用
+   不到，进入/退出全屏时一起切换显示。 */
+function onPdfFullscreenChange(){
+  updatePdfFullscreenBtnLabel();
+  updatePdfToolbarStickyTop();
+  var isFs = document.fullscreenElement || document.webkitFullscreenElement;
+  $("pdfZoomGroup").hidden = !isFs;
+}
+document.addEventListener("fullscreenchange", onPdfFullscreenChange);
+document.addEventListener("webkitfullscreenchange", onPdfFullscreenChange);
 function updatePdfFullscreenBtnLabel(){
   var isFs = document.fullscreenElement || document.webkitFullscreenElement;
   $("pdfFullscreenBtn").textContent = isFs ? "⛶ 退出全屏" : "⛶ 全屏";
 }
+
+/* 选大小：适应整页 / 大 / 特大，切 #pdfContent 的 data-pdf-zoom 属性，
+   由上面的 CSS 决定要怎么放大（用高度框住整页，还是用宽度放大）。 */
+["pdfZoomFitBtn","pdfZoomLargeBtn","pdfZoomXlBtn"].forEach(function(id){
+  $(id).addEventListener("click", function(){
+    $("pdfContent").dataset.pdfZoom = this.dataset.pdfzoom;
+    document.querySelectorAll("#pdfZoomGroup [data-pdfzoom]").forEach(function(b){ b.classList.remove("pdftool-active"); });
+    this.classList.add("pdftool-active");
+  });
+});
+/* 选了「大」/「特大」之后整页可能会比屏幕高，滑动手势有时候会被画笔的
+   画布吃掉、滑不太动，这两个按钮直接把画面往上/往下移动一段，不用滑动
+   也能看到页面上下的内容。 */
+$("pdfScrollUpBtn").addEventListener("click", function(){
+  $("pdfContent").scrollBy({ top: -Math.round(window.innerHeight*0.6), behavior:"smooth" });
+});
+$("pdfScrollDownBtn").addEventListener("click", function(){
+  $("pdfContent").scrollBy({ top: Math.round(window.innerHeight*0.6), behavior:"smooth" });
+});
 
 /* 「保存为 PDF」：把每一页的背景图 + 这一页画的标注（不含镭射笔，那个本来
    就是暂时的）合成成一张图，再用最基本的 PDF 格式（不靠任何外部函式库，
