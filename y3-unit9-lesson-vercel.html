@@ -255,7 +255,10 @@
      只在老师自己画面看得到，不会同步给学生（跟共享白板是两回事）。 */
   .pdf-content{ display:none; flex-direction:column; gap:14px; }
   .pdf-content.show{ display:flex; }
-  .pdf-toolbar{ display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; }
+  /* 工具列贴在顶端跟着卷动（position:sticky），配合 topbar 的高度动态算出
+     它该停在哪个位置（JS 里量 topbar 高度，见 openPdfMode），这样往下滑看
+     PDF 内容时，工具列还是一直在看得到、点得到的地方，不用滑回最上面。 */
+  .pdf-toolbar{ display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; position:sticky; z-index:6; background:var(--bg); padding:10px 0; margin:0 -4px; }
   .pdf-toolbar-group{ display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
   .pdf-page-nav{ display:flex; align-items:center; gap:10px; }
   .board-mini-btn.pdftool-active{ background:var(--primary); color:#fff; border-color:transparent; }
@@ -263,6 +266,13 @@
   .pdf-page-wrap img{ display:block; width:100%; height:auto; user-select:none; -webkit-user-drag:none; pointer-events:none; }
   .pdf-page-wrap canvas{ position:absolute; inset:0; width:100%; height:100%; touch-action:none; cursor:crosshair; }
   body.stage-mode .pdf-page-wrap{ max-width:100%; }
+  /* 全屏模式：把整个「上课 PDF」区块（工具列 + 内容）一起放大铺满屏幕，
+     方便投影时用，工具列一样贴在上面，可以随时选工具/换页/结束全屏。 */
+  #pdfContent:fullscreen{ background:var(--bg); padding:18px 24px; overflow:auto; }
+  #pdfContent:fullscreen .pdf-toolbar{ background:var(--bg); }
+  #pdfContent:fullscreen .pdf-page-wrap{ max-width:min(92vw, 900px); }
+  #pdfContent:-webkit-full-screen{ background:var(--bg); padding:18px 24px; overflow:auto; }
+  #pdfContent:-webkit-full-screen .pdf-page-wrap{ max-width:min(92vw, 900px); }
 
   @media (max-width: 900px){
     .sidebar{ position:fixed; left:0; top:0; bottom:0; z-index:20; transform:translateX(-100%); transition:transform .2s ease; }
@@ -316,6 +326,8 @@ window.__PDF_PAGES__ = ["data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAlgCWAAD/2wBD
           <button class="board-mini-btn" id="pdfEraserBtn" data-pdftool="eraser" type="button">🧹 橡皮擦</button>
           <button class="board-mini-btn" id="pdfLaserBtn" data-pdftool="laser" type="button">🔴 镭射笔</button>
           <button class="board-mini-btn" id="pdfClearPageBtn" type="button">🗑️ 清空这一页标注</button>
+          <button class="board-mini-btn" id="pdfFullscreenBtn" type="button">⛶ 全屏</button>
+          <button class="board-mini-btn" id="pdfSaveAsPdfBtn" type="button">⬇️ 保存为 PDF（存到电脑）</button>
         </div>
         <div class="pdf-page-nav">
           <button class="nav-btn" id="pdfPrevBtn" type="button">← 上一页</button>
@@ -2848,6 +2860,7 @@ $("boardRevokeAllBtn").addEventListener("click", function(){
 var PDF_PAGES = window.__PDF_PAGES__ || [];
 var PDF_ASPECT = 1275/1842; // 宽/高，配合内部画布分辨率用，跟内嵌图片的实际比例要一致
 var PDF_CANVAS_W = 1275, PDF_CANVAS_H = 1842;
+var PDF_STORAGE_KEY = "y3u9_pdf_annotations_v1";
 var pdfPageIndex = 0;
 var pdfStrokesByPage = {}; // 页码(0-based) -> [{tool,color,size,alpha,pts:[{x,y}]}]
 var pdfTool = "pen"; // pen | highlighter | eraser | laser
@@ -2859,6 +2872,20 @@ var pdfCurrentStroke = null;
 var pdfLaserPoints = []; // {x,y,t} 镭射笔的点，会随时间淡出，不会真的留在页面上
 var pdfLaserRAF = null;
 var PDF_ERASE_RADIUS = 26;
+
+/* 标注存在这台电脑/这个浏览器的 localStorage 里（不是用 Supabase 同步的），
+   所以下一堂课只要用同一台电脑、同一个浏览器打开，笔记还在；换一台电脑
+   或清过浏览器资料就不会有了。每次画完/擦完/清空都会立刻存一次。 */
+function loadPdfAnnotations(){
+  try {
+    var saved = localStorage.getItem(PDF_STORAGE_KEY);
+    if (saved) pdfStrokesByPage = JSON.parse(saved) || {};
+  } catch(e){}
+}
+function savePdfAnnotations(){
+  try { localStorage.setItem(PDF_STORAGE_KEY, JSON.stringify(pdfStrokesByPage)); } catch(e){}
+}
+loadPdfAnnotations();
 
 function initPdfButton(){
   if (PDF_PAGES.length) { $("pdfModeBtn").hidden = false; }
@@ -2896,35 +2923,37 @@ function eraseAtPdf(pos){
       changed = true;
     }
   }
-  if (changed) redrawPdfCanvas();
+  if (changed){ redrawPdfCanvas(); savePdfAnnotations(); }
 }
 
 function redrawPdfCanvas(){
   if (!pdfCtx) return;
   pdfCtx.clearRect(0,0,PDF_CANVAS_W,PDF_CANVAS_H);
   var list = pdfStrokesByPage[pdfPageIndex] || [];
-  list.forEach(function(s){ drawPdfStroke(s); });
+  list.forEach(function(s){ drawPdfStroke(s, pdfCtx); });
   drawPdfLaser();
 }
-function drawPdfStroke(s){
+/* ctx 参数是为了「保存为 PDF」也能重用同一套画笔逻辑，把标注画到一张
+   离屏的合成画布上（那边没有 pdfCtx，要传自己的 ctx 进来）。 */
+function drawPdfStroke(s, ctx){
   if (!s.pts || s.pts.length < 1) return;
-  pdfCtx.save();
-  pdfCtx.globalAlpha = s.alpha != null ? s.alpha : 1;
-  pdfCtx.strokeStyle = s.color;
-  pdfCtx.lineWidth = s.size;
-  pdfCtx.lineCap = "round";
-  pdfCtx.lineJoin = "round";
-  pdfCtx.beginPath();
+  ctx.save();
+  ctx.globalAlpha = s.alpha != null ? s.alpha : 1;
+  ctx.strokeStyle = s.color;
+  ctx.lineWidth = s.size;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
   if (s.pts.length === 1){
-    pdfCtx.arc(s.pts[0].x, s.pts[0].y, s.size/2, 0, Math.PI*2);
-    pdfCtx.fillStyle = s.color;
-    pdfCtx.fill();
+    ctx.arc(s.pts[0].x, s.pts[0].y, s.size/2, 0, Math.PI*2);
+    ctx.fillStyle = s.color;
+    ctx.fill();
   } else {
-    pdfCtx.moveTo(s.pts[0].x, s.pts[0].y);
-    for (var i=1;i<s.pts.length;i++) pdfCtx.lineTo(s.pts[i].x, s.pts[i].y);
-    pdfCtx.stroke();
+    ctx.moveTo(s.pts[0].x, s.pts[0].y);
+    for (var i=1;i<s.pts.length;i++) ctx.lineTo(s.pts[i].x, s.pts[i].y);
+    ctx.stroke();
   }
-  pdfCtx.restore();
+  ctx.restore();
 }
 function drawPdfLaser(){
   var now = Date.now();
@@ -2985,6 +3014,7 @@ function pdfPointerMove(e){
   pdfLastPos = pos;
 }
 function pdfPointerUp(){
+  if (pdfDrawing && pdfCurrentStroke) savePdfAnnotations();
   pdfDrawing = false;
   pdfCurrentStroke = null;
   pdfLastPos = null;
@@ -2998,6 +3028,16 @@ function renderPdfPage(){
   $("pdfNextBtn").disabled = pdfPageIndex === PDF_PAGES.length-1;
   redrawPdfCanvas();
 }
+
+/* 工具列贴顶的位置要跟着 topbar 的实际高度走，不然会被 topbar 挡住或
+   叠在一起；每次打开/切回来，或窗口大小改变（比如转横向），都重新量一次。 */
+function updatePdfToolbarStickyTop(){
+  var toolbar = document.querySelector("#pdfContent .pdf-toolbar");
+  var topbarEl = document.querySelector(".topbar");
+  if (!toolbar) return;
+  toolbar.style.top = (topbarEl ? topbarEl.offsetHeight : 60) + "px";
+}
+window.addEventListener("resize", function(){ if (!$("pdfContent").hidden) updatePdfToolbarStickyTop(); });
 
 function openPdfMode(){
   $("normalContent").hidden = true;
@@ -3016,6 +3056,7 @@ function openPdfMode(){
     pdfCanvas.addEventListener("touchmove", pdfPointerMove, {passive:false});
     pdfCanvas.addEventListener("touchend", pdfPointerUp);
   }
+  updatePdfToolbarStickyTop();
   renderPdfPage();
 }
 function closePdfMode(){
@@ -3033,6 +3074,7 @@ $("pdfNextBtn").addEventListener("click", function(){ if (pdfPageIndex<PDF_PAGES
 $("pdfClearPageBtn").addEventListener("click", function(){
   pdfStrokesByPage[pdfPageIndex] = [];
   redrawPdfCanvas();
+  savePdfAnnotations();
 });
 ["pdfPenBtn","pdfHighlightBtn","pdfEraserBtn","pdfLaserBtn"].forEach(function(id){
   $(id).addEventListener("click", function(){ setPdfTool(this.dataset.pdftool); });
@@ -3045,6 +3087,132 @@ document.querySelectorAll("#pdfContent .board-color").forEach(function(btn){
     if (pdfTool === "eraser" || pdfTool === "laser") setPdfTool("pen");
   });
 });
+
+/* 全屏：把整块「上课 PDF」（工具列 + 页面）一起放大铺满屏幕，方便投影；
+   再按一次（或按 Esc）就退出，按钮文字/图示也会跟着切换。 */
+$("pdfFullscreenBtn").addEventListener("click", function(){
+  var target = $("pdfContent");
+  var isFs = document.fullscreenElement || document.webkitFullscreenElement;
+  if (!isFs){
+    var req = target.requestFullscreen || target.webkitRequestFullscreen;
+    if (req) req.call(target);
+  } else {
+    var exit = document.exitFullscreen || document.webkitExitFullscreen;
+    if (exit) exit.call(document);
+  }
+});
+document.addEventListener("fullscreenchange", updatePdfFullscreenBtnLabel);
+document.addEventListener("webkitfullscreenchange", updatePdfFullscreenBtnLabel);
+function updatePdfFullscreenBtnLabel(){
+  var isFs = document.fullscreenElement || document.webkitFullscreenElement;
+  $("pdfFullscreenBtn").textContent = isFs ? "⛶ 退出全屏" : "⛶ 全屏";
+}
+
+/* 「保存为 PDF」：把每一页的背景图 + 这一页画的标注（不含镭射笔，那个本来
+   就是暂时的）合成成一张图，再用最基本的 PDF 格式（不靠任何外部函式库，
+   直接把 JPEG 图片按 PDF 规格包起来）拼成一份多页 PDF，触发浏览器下载。
+   这样下课后可以把整份连标注的课件存到电脑，跟另存/打印出来的效果一样。 */
+function loadImageEl(src){
+  return new Promise(function(resolve, reject){
+    var img = new Image();
+    img.onload = function(){ resolve(img); };
+    img.onerror = function(){ reject(new Error("图片载入失败")); };
+    img.src = src;
+  });
+}
+function compositePdfPageToJpegBytes(pageIndex){
+  return loadImageEl(PDF_PAGES[pageIndex]).then(function(img){
+    var c = document.createElement("canvas");
+    c.width = PDF_CANVAS_W; c.height = PDF_CANVAS_H;
+    var ctx = c.getContext("2d");
+    ctx.drawImage(img, 0, 0, PDF_CANVAS_W, PDF_CANVAS_H);
+    var strokes = pdfStrokesByPage[pageIndex] || [];
+    strokes.forEach(function(s){ drawPdfStroke(s, ctx); });
+    var dataUrl = c.toDataURL("image/jpeg", 0.85);
+    var b64 = dataUrl.split(",")[1];
+    var raw = atob(b64);
+    var bytes = new Uint8Array(raw.length);
+    for (var i=0;i<raw.length;i++) bytes[i] = raw.charCodeAt(i);
+    return bytes;
+  });
+}
+function buildPdfFromJpegPages(jpegPagesBytes, W, H){
+  var chunks = []; var pos = 0; var offsets = [];
+  function strToBytes(str){ var arr = new Uint8Array(str.length); for (var i=0;i<str.length;i++) arr[i] = str.charCodeAt(i) & 0xFF; return arr; }
+  function pushText(str){ var b = strToBytes(str); chunks.push(b); pos += b.length; }
+  function pushBytes(bytes){ chunks.push(bytes); pos += bytes.length; }
+  function beginObj(num){ offsets[num] = pos; pushText(num + " 0 obj\n"); }
+  function endObj(){ pushText("\nendobj\n"); }
+  function pad10(n){ var s = String(n); while (s.length<10) s = "0"+s; return s; }
+
+  var N = jpegPagesBytes.length;
+  var totalObjs = 2 + N*3;
+
+  pushText("%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
+
+  beginObj(1);
+  pushText("<< /Type /Catalog /Pages 2 0 R >>");
+  endObj();
+
+  var kids = [];
+  for (var i=0;i<N;i++) kids.push((3 + i*3) + " 0 R");
+  beginObj(2);
+  pushText("<< /Type /Pages /Kids [" + kids.join(" ") + "] /Count " + N + " >>");
+  endObj();
+
+  for (var j=0;j<N;j++){
+    var pageObjNum = 3 + j*3, contentObjNum = 4 + j*3, imgObjNum = 5 + j*3;
+    var contentStr = "q " + W + " 0 0 " + H + " 0 0 cm /Im0 Do Q";
+
+    beginObj(pageObjNum);
+    pushText("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + W + " " + H + "] /Resources << /XObject << /Im0 " + imgObjNum + " 0 R >> >> /Contents " + contentObjNum + " 0 R >>");
+    endObj();
+
+    beginObj(contentObjNum);
+    pushText("<< /Length " + contentStr.length + " >>\nstream\n" + contentStr + "\nendstream");
+    endObj();
+
+    beginObj(imgObjNum);
+    var jpeg = jpegPagesBytes[j];
+    pushText("<< /Type /XObject /Subtype /Image /Width " + W + " /Height " + H + " /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length " + jpeg.length + " >>\nstream\n");
+    pushBytes(jpeg);
+    pushText("\nendstream");
+    endObj();
+  }
+
+  var xrefStart = pos;
+  pushText("xref\n0 " + (totalObjs+1) + "\n0000000000 65535 f \n");
+  for (var n=1;n<=totalObjs;n++) pushText(pad10(offsets[n]||0) + " 00000 n \n");
+  pushText("trailer\n<< /Size " + (totalObjs+1) + " /Root 1 0 R >>\nstartxref\n" + xrefStart + "\n%%EOF");
+
+  var total = new Uint8Array(pos);
+  var p2 = 0;
+  chunks.forEach(function(c){ total.set(c, p2); p2 += c.length; });
+  return total;
+}
+$("pdfSaveAsPdfBtn").addEventListener("click", function(){
+  var btn = $("pdfSaveAsPdfBtn");
+  if (btn.disabled) return;
+  var origText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "⏳ 正在生成 PDF…";
+  var jobs = [];
+  for (var i=0;i<PDF_PAGES.length;i++) jobs.push(compositePdfPageToJpegBytes(i));
+  Promise.all(jobs).then(function(jpegPagesBytes){
+    var pdfBytes = buildPdfFromJpegPages(jpegPagesBytes, PDF_CANVAS_W, PDF_CANVAS_H);
+    var blob = new Blob([pdfBytes], {type:"application/pdf"});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url; a.download = "单元九上课PDF（含标注）.pdf";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
+    btn.disabled = false; btn.textContent = origText;
+  }).catch(function(err){
+    alert("生成 PDF 失败，请重试。" + (err && err.message ? "（" + err.message + "）" : ""));
+    btn.disabled = false; btn.textContent = origText;
+  });
+});
+
 initPdfButton();
 
 initPoll();
